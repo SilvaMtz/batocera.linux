@@ -20,6 +20,9 @@
 #     before its status could be extracted").
 #   * The volumes belong to the Mac user's uid/gid and keep a .keep file:
 #     Docker resets an empty volume's owner to root on every mount.
+#   * Rust packages resolve crates at download time when they have no
+#     Cargo.lock; CARGO_RESOLVER_INCOMPATIBLE_RUST_VERSIONS=fallback keeps
+#     them compatible with 43.1's rustc (newest crates need a newer one).
 #
 # The images end up in the batocera-x86_64 volume under
 # /x86_64/images/batocera/images/x86_64/; install-image.sh sends them to the PC.
@@ -75,6 +78,10 @@ touch "$REPO/configs/.user_defconfig"
 
 RUN=(docker run -t --init --rm --platform linux/amd64
      -e HOME="$HOME"
+     # Rust packages without a Cargo.lock get their crates resolved at
+     # download time; today's newest crates need a newer rustc than 43.1's
+     # 1.92. "fallback" picks the newest versions that still work with it.
+     -e CARGO_RESOLVER_INCOMPATIBLE_RUST_VERSIONS=fallback
      -v "$REPO:/build"
      -v "$DL_VOL:/build/buildroot/dl"
      -v "$OUT_VOL:/x86_64"
