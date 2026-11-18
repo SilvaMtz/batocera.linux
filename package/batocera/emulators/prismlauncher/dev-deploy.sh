@@ -55,6 +55,10 @@ cp -R "$OVERLAY/usr/share/themes/BatoceraNoBorder/." "$STAGE/theme/"
 cp "$GEN_DIR"/*.py "$STAGE/generator/"
 cp -R "$ES_DIR/roms/minecraft/." "$STAGE/roms/"
 cp -R "$PKG_DIR/theme/art" "$STAGE/esart"
+# The fork's update guard (official updates would replace this build)
+mkdir -p "$STAGE/scripts"
+cp "$REPO/package/batocera/core/batocera-scripts/scripts/batocera-config" \
+   "$REPO/package/batocera/core/batocera-scripts/scripts/batocera-upgrade" "$STAGE/scripts/"
 # The minecraft entries of es_systems.yml and configgen-defaults.yml
 # (each up to the next top-level key)
 yaml_block() { awk '/^minecraft:$/ {f = 1; print; next} f && /^[A-Za-z0-9_-]+:/ {exit} f' "$1"; }
@@ -78,6 +82,10 @@ export DISPLAY=:0
 if [ -x /usr/bin/batocera-minecraft ]; then /usr/bin/batocera-minecraft stop || true; fi
 
 install -m 0755 "$D/batocera-minecraft" /usr/bin/batocera-minecraft
+install -m 0755 "$D/scripts/batocera-config" /usr/bin/batocera-config
+install -m 0755 "$D/scripts/batocera-upgrade" /usr/bin/batocera-upgrade
+# The image's default is off; existing installs keep their own setting, so set it
+batocera-settings-set updates.enabled 0
 mkdir -p /usr/share/prismlauncher
 rm -rf /usr/share/prismlauncher/minecraft
 cp -R "$D/minecraft" /usr/share/prismlauncher/minecraft
@@ -179,7 +187,7 @@ if [ "$RESTART" = 1 ]; then
 fi
 
 echo "Installed: /usr/bin/batocera-minecraft, /usr/share/prismlauncher, $CONFIGGEN/generators/prismlauncher, configgen defaults,"
-echo "           /etc/openbox/rc.xml, BatoceraNoBorder theme, carbon theme art, /userdata/roms/minecraft, es_systems_minecraft.cfg"
+echo "           /etc/openbox/rc.xml, BatoceraNoBorder theme, carbon theme art, update guard, /userdata/roms/minecraft, es_systems_minecraft.cfg"
 [ "$SAVE" = 1 ] && echo "Saved to the overlay (survives reboot)." || echo "RAM only: lost on reboot (use --save to keep)."
 [ "$RESTART" = 1 ] && echo "Restarting EmulationStation."
 rm -rf "$D"

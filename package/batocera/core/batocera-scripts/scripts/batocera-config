@@ -189,6 +189,13 @@ if [ "$command" = "canupdate" ];then
 	fi
 	settingsupdateurl="$(/usr/bin/batocera-settings-get updates.url)"
 
+	# Minecraft fork: official updates would replace this build, so only a
+	# custom updates.url (where this fork's own builds are published) counts
+	if test -z "${settingsupdateurl}"; then
+	    echo "No updates: this is a custom build; set updates.url to update it" >&2
+	    exit 1
+	fi
+
 	# customizable upgrade url website
 	if test -n "${settingsupdateurl}"; then
 	    updateurl="${settingsupdateurl}"

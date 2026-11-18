@@ -57,6 +57,15 @@ test "${board}" = "rpi4" && board=rpi464 # "temporarly" download on rpi464 for r
 updatetype="$(/usr/bin/batocera-settings-get updates.type)"
 settingsupdateurl="$(/usr/bin/batocera-settings-get updates.url)"
 
+# Minecraft fork: an official update would replace this build, so refuse
+# unless updates.url points at this fork's own builds (or a URL is given)
+if test -z "${settingsupdateurl}" -a $# -eq 0; then
+    echo "This is a custom Batocera build (Minecraft fork)."
+    echo "Official updates would replace it, so they are disabled."
+    echo "Set updates.url to where this fork's builds are published to update."
+    exit 1
+fi
+
 # customizable upgrade url website
 test -n "${settingsupdateurl}" && updateurl="${settingsupdateurl}"
 
