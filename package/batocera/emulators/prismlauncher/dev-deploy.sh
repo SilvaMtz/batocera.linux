@@ -5,7 +5,9 @@
 #
 # Usage: dev-deploy.sh [--host root@batocera.local] [--save] [--no-restart]
 #   --save        keep the copies across reboots (batocera-save-overlay).
-#                 Delete the saved overlay before installing a real build.
+#                 This saves everything in the RAM overlay, including the
+#                 NVIDIA driver links Batocera makes at boot. Delete the saved
+#                 overlay (/boot/boot/overlay) before installing a real build.
 #   --no-restart  don't restart EmulationStation afterwards
 #
 # Copies to /usr and /etc land in Batocera's RAM overlay and are lost on
@@ -99,20 +101,28 @@ mkdir -p /usr/share/themes/BatoceraNoBorder
 cp -R "$D/theme/." /usr/share/themes/BatoceraNoBorder/
 openbox --reconfigure 2>/dev/null || true
 
-# Prism AppImage, pinned like the package: reuse a matching copy or download it
+# Prism AppImage, pinned like the package. It is ~100 MB, so it is kept on
+# /userdata and linked into place: the RAM overlay (and a saved overlay,
+# 100 MB by default) only gets the small files.
 APP=/usr/share/prismlauncher/PrismLauncher.AppImage
+STORE=/userdata/system/prism-dev
+STORED="$STORE/PrismLauncher-$VERSION.AppImage"
 hash_of() { sha256sum "$1" 2>/dev/null | cut -d' ' -f1; }
-if [ "$(hash_of "$APP")" != "$SHA256" ]; then
+mkdir -p "$STORE"
+if [ "$(hash_of "$STORED")" != "$SHA256" ]; then
     PROTO=/userdata/system/prism-proto/PrismLauncher.AppImage
     if [ "$(hash_of "$PROTO")" = "$SHA256" ]; then
-        cp "$PROTO" "$APP"
+        cp "$PROTO" "$STORED.part"
     else
-        curl -fsSL -o "$APP.part" "https://github.com/PrismLauncher/PrismLauncher/releases/download/$VERSION/$SOURCE"
-        [ "$(hash_of "$APP.part")" = "$SHA256" ] || { echo "AppImage hash mismatch" >&2; rm -f "$APP.part"; exit 1; }
-        mv "$APP.part" "$APP"
+        curl -fsSL -o "$STORED.part" "https://github.com/PrismLauncher/PrismLauncher/releases/download/$VERSION/$SOURCE"
+        [ "$(hash_of "$STORED.part")" = "$SHA256" ] || { echo "AppImage hash mismatch" >&2; rm -f "$STORED.part"; exit 1; }
     fi
-    chmod 0755 "$APP"
+    chmod 0755 "$STORED.part"
+    mv "$STORED.part" "$STORED"
 fi
+rm -f "$APP"
+ln -s "$STORED" "$APP"
+chmod -R go+rX /usr/share/prismlauncher /usr/share/themes/BatoceraNoBorder
 
 # EmulationStation system definition, generated from the es_systems.yml entry
 python3 - <<'PY'
