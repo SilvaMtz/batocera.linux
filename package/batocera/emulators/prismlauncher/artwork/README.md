@@ -17,11 +17,12 @@ including upper and lower case:
 | `minecraft_Wallpaper.jpg` | Wallpaper behind the Minecraft carousel entry | 1920x1080 |
 | `minecraft_SinglePlayer.jpg` | Single Player entry | about 1000 px wide |
 | `minecraft_SplitScreen.jpg` | Split Screen entry | about 1000 px wide |
+| `minecraft_ManageMinecraft.jpg` | Manage Minecraft entry | about 1000 px wide |
 | `minecraft_PrismLauncher.jpg` | Prism Launcher entry | about 1000 px wide |
 
 Each menu entry's picture is `minecraft_<Title>.jpg`, where `<Title>` is the
 entry's name in `../roms/gamelist.xml` without spaces. A new entry named
-"Manage Minecraft" would use `minecraft_ManageMinecraft.jpg`.
+"Minecraft Launcher" would use `minecraft_MinecraftLauncher.jpg`.
 
 The logo is the one PNG: it needs a transparent background. Trim the empty
 margin around the letters, or the logo shows up small.

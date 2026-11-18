@@ -10,6 +10,8 @@ windows. Design doc: https://claude.ai/artifact/B9PkUHMB61vRypjDCRRFQw
 |---|---|
 | Prism AppImage 11.1.1 (pinned, sha256 in `prismlauncher.hash`) | this package, installed to `/usr/share/prismlauncher/` |
 | Launcher script | `batocera-minecraft`, installed to `/usr/bin/` |
+| Mod script (Modrinth; installs into P1 and P2) | `batocera-minecraft-mods`, installed to `/usr/bin/` |
+| Manage Minecraft, the mod manager app (Qt 6, QML screens) | `../minecraft-manager/`, its own package, selected by this one |
 | Instance templates P1/P2, Prism defaults | `minecraft/`, installed to `/usr/share/prismlauncher/minecraft/` |
 | Auto-LAN mod (source, build script; jar in P1's template) | `autolan/` |
 | System art (logos, carousel block, background) for es-theme-carbon, and its generator | `theme/`, installed to `/usr/share/emulationstation/themes/es-theme-carbon/art/` |
@@ -23,7 +25,10 @@ windows. Design doc: https://claude.ai/artifact/B9PkUHMB61vRypjDCRRFQw
 
 ## Menu entries
 
-Each `.minecraft` file holds one word, the mode passed to `batocera-minecraft`:
+Each `.minecraft` file holds one word. The generator runs
+`batocera-minecraft menu WORD`, and the script decides what it means (an
+unknown word, or `stop`, opens Prism Launcher), so a new entry only touches
+this package:
 
 - `singleplayer`: P1 with Prism's default account, full screen.
 - `splitscreen`: P1 (Microsoft account) on the left picks or creates a world.
@@ -32,15 +37,51 @@ Each `.minecraft` file holds one word, the mode passed to `batocera-minecraft`:
   `--profile Player2 --server 127.0.0.1:25565` on the right. When one player
   quits, the other window takes the whole screen. With no Microsoft account
   yet, Prism's window opens instead.
+- `manage`: Manage Minecraft, the mod manager (below).
 - `prism`: Prism's own window, for Microsoft sign-in and management.
 
-`batocera-minecraft stop` is the hotkey exit.
+`batocera-minecraft stop` is the hotkey exit; it also closes Manage Minecraft.
 
 For Single Player and Split Screen, Prism runs with `QT_QPA_PLATFORM=offscreen`:
 it works but draws no window, so nothing flashes before the game. If a game
 does not appear within 4 minutes (Prism stuck on a hidden dialog, such as an
 expired sign-in), the script closes it and opens Prism visibly instead. The
 Prism Launcher entry always shows Prism.
+
+## Manage Minecraft (mods)
+
+Mods come from Modrinth only, for the instances' Minecraft version and
+loader (26.3, Fabric), and always go into both P1 and P2: Split Screen needs
+the same mods on both sides. They are stored as Prism stores them (jar plus
+`mods/.index/<slug>.pw.toml`), so Prism lists and updates them too.
+
+- `batocera-minecraft-mods` does the work and can be used over SSH:
+  `info`, `list [--icons]`, `search [TEXT] [--sort ...] [--page N]`,
+  `install PROJECT...` (adds required mods, refuses incompatible ones),
+  `remove PROJECT...`, `updates`, `update [PROJECT...]`, `sync` (copies a mod
+  found in only one instance to the other). `--json` for programs,
+  `--data DIR` / `--template DIR` for test copies. The system's own mods (the
+  template's) can't be removed or updated here, nor can a mod another one
+  requires be removed. Removing a mod leaves the mods it required.
+- `../minecraft-manager/` is the app on the TV: Installed, Browse Modrinth
+  (most downloaded, or search with an on-screen keyboard) and Updates tabs,
+  driven by a controller (A select, B back/exit, LB/RB tabs, Y search) or
+  keyboard and mouse. A small C++ program runs the mod script and turns
+  controller input into key presses; the screens are QML files read at start
+  (`/usr/share/minecraft-manager/qml`), so `dev-deploy.sh` updates them
+  without compiling. On a Mac with Homebrew's `qt`, `cmake`, `ninja`, `sdl2`:
+
+  ```bash
+  cmake -S ../minecraft-manager/src -B /tmp/mm-build -G Ninja -DCMAKE_PREFIX_PATH="$(brew --prefix qt);$(brew --prefix)"
+  cmake --build /tmp/mm-build
+  MINECRAFT_MODS_CMD="$(brew --prefix)/bin/python3 $PWD/batocera-minecraft-mods --data /tmp/mm-data --template $PWD/minecraft" \
+      /tmp/mm-build/minecraft-manager --qml ../minecraft-manager/src/qml --windowed
+  ```
+
+  `/tmp/mm-data` needs `instances/P1` and `P2` with `mmc-pack.json` and
+  `minecraft/mods` (copy them from the PC). `--screenshot FILE --keys
+  Down,Select` takes a picture after pressing keys, for testing without a
+  screen (`QT_QPA_PLATFORM=offscreen`).
 
 ## Data
 
@@ -161,5 +202,7 @@ Logs: `/userdata/system/logs/minecraft.log`, `es_launch_stdout.log` /
   (World Options) are cut off at that width.
 - Controllers: Controlify binds a profile to `md5(vendor id + product id + serial)`;
   P2 falls back to the first controller if its own is missing. Set up by hand for now.
-- Manage Minecraft UI, Minecraft Launcher entry and the account pickers.
-- The image has not been built yet (no build machine set up).
+- Minecraft Launcher entry and the account pickers.
+- Manage Minecraft: resource packs, shaders and modpacks; removing the mods
+  another mod pulled in.
+- Not yet checked in a built image: the first build (scripts/minecraft-fork/build-on-mac.sh) is running.

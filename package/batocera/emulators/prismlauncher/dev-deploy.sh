@@ -48,7 +48,7 @@ SSH_OPTS=(-o BatchMode=yes -o ConnectTimeout=10 -o LogLevel=ERROR)
 STAGE="$(mktemp -d)"
 trap 'rm -rf "$STAGE"' EXIT
 mkdir -p "$STAGE/generator" "$STAGE/roms" "$STAGE/theme"
-cp "$PKG_DIR/batocera-minecraft" "$STAGE/"
+cp "$PKG_DIR/batocera-minecraft" "$PKG_DIR/batocera-minecraft-mods" "$STAGE/"
 cp -R "$PKG_DIR/minecraft" "$STAGE/"
 cp "$OVERLAY/etc/openbox/rc.xml" "$STAGE/"
 cp -R "$OVERLAY/usr/share/themes/BatoceraNoBorder/." "$STAGE/theme/"
@@ -57,6 +57,18 @@ cp -R "$PKG_DIR/roms/." "$STAGE/roms/"
 cp -R "$PKG_DIR/theme/art" "$STAGE/esart"
 # The builder's own pictures over the drawn defaults, as the image build does
 python3 "$PKG_DIR/apply-artwork.py" "$PKG_DIR/artwork" "$STAGE/esart" "$STAGE/roms"
+# Manage Minecraft: its screens (QML, no compiling) and, once an image build
+# has compiled it, the program from the build's Docker volume
+MANAGER_DIR="$REPO/package/batocera/emulators/minecraft-manager"
+cp -R "$MANAGER_DIR/src/qml" "$STAGE/manager-qml"
+if docker info >/dev/null 2>&1 && docker run --rm -v batocera-x86_64:/x86_64:ro alpine:3.20 \
+        cat /x86_64/target/usr/bin/minecraft-manager > "$STAGE/minecraft-manager" 2>/dev/null; then
+    echo "Manage Minecraft: program from the image build's output"
+else
+    rm -f "$STAGE/minecraft-manager"
+    echo "Manage Minecraft: program not built yet (scripts/minecraft-fork/build-on-mac.sh minecraft-manager);"
+    echo "  the PC keeps the one it has, or opens Prism Launcher for that entry if it has none"
+fi
 # The fork's update guard (official updates would replace this build)
 mkdir -p "$STAGE/scripts"
 cp "$REPO/package/batocera/core/batocera-scripts/scripts/batocera-config" \
@@ -84,6 +96,13 @@ export DISPLAY=:0
 if [ -x /usr/bin/batocera-minecraft ]; then /usr/bin/batocera-minecraft stop || true; fi
 
 install -m 0755 "$D/batocera-minecraft" /usr/bin/batocera-minecraft
+install -m 0755 "$D/batocera-minecraft-mods" /usr/bin/batocera-minecraft-mods
+rm -rf /usr/share/minecraft-manager/qml
+mkdir -p /usr/share/minecraft-manager
+cp -R "$D/manager-qml" /usr/share/minecraft-manager/qml
+if [ -s "$D/minecraft-manager" ]; then
+    install -m 0755 "$D/minecraft-manager" /usr/bin/minecraft-manager
+fi
 install -m 0755 "$D/scripts/batocera-config" /usr/bin/batocera-config
 install -m 0755 "$D/scripts/batocera-upgrade" /usr/bin/batocera-upgrade
 # The image's default is off; existing installs keep their own setting, so set it
@@ -237,7 +256,7 @@ if [ "$RESTART" = 1 ]; then
     batocera-es-swissknife --restart >/dev/null 2>&1 &
 fi
 
-echo "Installed: /usr/bin/batocera-minecraft, /usr/share/prismlauncher, $CONFIGGEN/generators/prismlauncher, configgen defaults,"
+echo "Installed: /usr/bin/batocera-minecraft(-mods), Manage Minecraft, /usr/share/prismlauncher, $CONFIGGEN/generators/prismlauncher, configgen defaults,"
 echo "           /etc/openbox/rc.xml, BatoceraNoBorder theme, carbon theme art, update guard, /userdata/roms/minecraft, es_systems_minecraft.cfg"
 [ "$SAVE" = 1 ] && echo "Saved to the overlay (survives reboot)." || echo "RAM only: lost on reboot (use --save to keep)."
 [ "$RESTART" = 1 ] && echo "Restarting EmulationStation."

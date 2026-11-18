@@ -8,24 +8,18 @@ from ..Generator import Generator
 if TYPE_CHECKING:
     from ...types import HotkeysContext
 
-_MODES = ("singleplayer", "splitscreen", "prism")
-
-
 class PrismlauncherGenerator(Generator):
     """Minecraft system: each menu entry is a small file naming its mode.
 
     batocera-minecraft does the work (instances, accounts, window placement)
-    so it can be run and tested over SSH without EmulationStation.
+    and decides what each entry's word means, so a new menu entry only
+    touches the prismlauncher package. It can also be run and tested over
+    SSH without EmulationStation.
     """
 
     def generate(self, system, rom, playersControllers, metadata, guns, wheels, gameResolution):
-        mode = "prism"
-        if rom.is_file():
-            words = rom.read_text().split()
-            if words and words[0] in _MODES:
-                mode = words[0]
-
-        return Command.Command(array=["/usr/bin/batocera-minecraft", mode])
+        words = rom.read_text().split() if rom.is_file() else []
+        return Command.Command(array=["/usr/bin/batocera-minecraft", "menu", *words[:1]])
 
     def getMouseMode(self, config, rom):
         # Prism's own window (Microsoft sign-in) needs a pointer

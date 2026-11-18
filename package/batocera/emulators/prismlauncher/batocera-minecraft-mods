@@ -1,0 +1,583 @@
+#!/usr/bin/env python3
+"""Manage the Minecraft system's mods from Modrinth (Manage Minecraft, or SSH).
+
+Every mod goes into both instances, P1 and P2: Split Screen needs the same
+mods on both sides. Mods are stored the way Prism Launcher stores them (the
+jar in minecraft/mods/ plus minecraft/mods/.index/<slug>.pw.toml), so Prism
+lists them and can update them as well. Only Modrinth is used, and only
+versions for the instances' Minecraft version and mod loader.
+
+Usage: batocera-minecraft-mods [--json] [--data DIR] [--template DIR] COMMAND
+  info                    game version, loader and the instances
+  list [--icons]          installed mods (--icons: with Modrinth icon URLs)
+  search [TEXT] [--sort relevance|downloads|follows|newest|updated] [--page N]
+  install PROJECT...      mods and the mods they require (Modrinth slug or id)
+  remove PROJECT...       mods (not system mods, nor ones another mod requires)
+  updates                 installed mods with a newer version
+  update [PROJECT...]     update these mods, or all that have an update
+  sync                    copy mods found in only one instance to the other
+
+--json prints one JSON document (for the Manage Minecraft app); errors are
+{"error": "..."} with exit code 1. System mods (the ones in the image's
+instance templates) can't be removed or updated here: image updates handle
+them. Jars without Prism metadata (our batocera-autolan.jar, or one copied by
+hand) are listed but never touched.
+"""
+from __future__ import annotations
+
+import argparse
+import fcntl
+import hashlib
+import json
+import os
+import sys
+import tomllib
+import urllib.error
+import urllib.parse
+import urllib.request
+import zipfile
+from pathlib import Path
+
+DATA = Path("/userdata/system/configs/prismlauncher")
+TEMPLATE = Path("/usr/share/prismlauncher/minecraft")
+INSTANCES = ("P1", "P2")
+API = "https://api.modrinth.com/v2"
+USER_AGENT = "batocera-minecraft-mods/1.0"
+PAGE_SIZE = 20
+LOADERS = {  # mmc-pack.json component -> Modrinth loader
+    "net.fabricmc.fabric-loader": "fabric",
+    "org.quiltmc.quilt-loader": "quilt",
+    "net.neoforged": "neoforge",
+    "net.minecraftforge": "forge",
+}
+
+
+class Failure(Exception):
+    """A problem to report to the user (not a bug)."""
+
+
+# ------------------------------------------------------------------- modrinth
+
+def api(path: str, params: dict | None = None, body: object = None):
+    url = API + path
+    if params:
+        url += "?" + urllib.parse.urlencode(
+            {k: json.dumps(v) if isinstance(v, (list, dict)) else v for k, v in params.items()})
+    data = json.dumps(body).encode() if body is not None else None
+    req = urllib.request.Request(url, data=data, headers={
+        "User-Agent": USER_AGENT, "Content-Type": "application/json"})
+    try:
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            return json.load(resp)
+    except urllib.error.HTTPError as exc:
+        if exc.code == 404:
+            return None
+        raise Failure(f"Modrinth answered {exc.code} for {path}") from exc
+    except (urllib.error.URLError, TimeoutError) as exc:
+        raise Failure(f"Can't reach Modrinth ({getattr(exc, 'reason', exc)}). Is the network up?") from exc
+
+
+def download(url: str, sha512: str) -> bytes:
+    req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
+    try:
+        with urllib.request.urlopen(req, timeout=120) as resp:
+            data = resp.read()
+    except (urllib.error.URLError, TimeoutError) as exc:
+        raise Failure(f"Download failed: {url} ({getattr(exc, 'reason', exc)})") from exc
+    if hashlib.sha512(data).hexdigest() != sha512:
+        raise Failure(f"Download didn't match its checksum: {url}")
+    return data
+
+
+class Game:
+    """The instances' Minecraft version and loader (from P1's mmc-pack.json)."""
+
+    def __init__(self, data: Path):
+        self.data = data
+        packs = {}
+        for inst in INSTANCES:
+            path = data / "instances" / inst / "mmc-pack.json"
+            if not path.exists():
+                raise Failure(f"Instance {inst} doesn't exist yet: start Minecraft once first")
+            comps = {c["uid"]: c.get("version") for c in json.loads(path.read_text())["components"]}
+            packs[inst] = (comps.get("net.minecraft"),
+                           next((l for uid, l in LOADERS.items() if uid in comps), None))
+        self.version, self.loader = packs[INSTANCES[0]]
+        if not self.version or not self.loader:
+            raise Failure("P1 has no Minecraft version or mod loader")
+        if len(set(packs.values())) > 1:
+            raise Failure("P1 and P2 use different Minecraft versions or loaders: "
+                          + ", ".join(f"{i} {v} {l}" for i, (v, l) in packs.items()))
+
+    def compatible_version(self, project_id: str, title: str) -> dict:
+        versions = api(f"/project/{project_id}/version",
+                       {"loaders": [self.loader], "game_versions": [self.version]}) or []
+        if not versions:
+            raise Failure(f"{title} has no version for Minecraft {self.version} with {self.loader.title()}")
+        return next((v for v in versions if v["version_type"] == "release"), versions[0])
+
+
+# ------------------------------------------------------------- installed mods
+
+def mods_dir(data: Path, inst: str) -> Path:
+    return data / "instances" / inst / "minecraft" / "mods"
+
+
+def system_slugs(template: Path) -> set[str]:
+    return {p.name.removesuffix(".pw.toml")
+            for inst in INSTANCES
+            for p in (mods_dir(template, inst) / ".index").glob("*.pw.toml")}
+
+
+def jar_state(folder: Path, filename: str) -> str | None:
+    if (folder / filename).exists():
+        return "enabled"
+    if (folder / (filename + ".disabled")).exists():
+        return "disabled"
+    return None
+
+
+def jar_info(jar: Path) -> tuple[str | None, str | None]:
+    """Name and version from a Fabric/Quilt jar's own metadata, if readable."""
+    try:
+        with zipfile.ZipFile(jar) as z:
+            names = set(z.namelist())
+            if "fabric.mod.json" in names:
+                meta = json.loads(z.read("fabric.mod.json"))
+                return meta.get("name"), meta.get("version")
+            if "quilt.mod.json" in names:
+                meta = json.loads(z.read("quilt.mod.json")).get("quilt_loader", {})
+                return meta.get("metadata", {}).get("name"), meta.get("version")
+    except (OSError, ValueError, zipfile.BadZipFile):
+        pass
+    return None, None
+
+
+def installed(data: Path, template: Path) -> dict[str, dict]:
+    """Mods with Prism metadata, keyed by Modrinth project id ("file:<slug>"
+    for metadata without one), plus "unmanaged" jars under key "jar:<name>"."""
+    system = system_slugs(template)
+    mods: dict[str, dict] = {}
+    for inst in INSTANCES:
+        folder = mods_dir(data, inst)
+        known = set()
+        for meta_path in sorted((folder / ".index").glob("*.pw.toml")):
+            meta = tomllib.loads(meta_path.read_text())
+            slug = meta_path.name.removesuffix(".pw.toml")
+            modrinth = meta.get("update", {}).get("modrinth", {})
+            key = modrinth.get("mod-id") or f"file:{slug}"
+            known.update({meta["filename"], meta["filename"] + ".disabled"})
+            mod = mods.setdefault(key, {
+                "id": modrinth.get("mod-id"), "slug": slug, "name": meta.get("name", slug),
+                "version": meta.get("x-prismlauncher-version-number"),
+                "version_id": modrinth.get("version"), "filename": meta["filename"],
+                "sha512": meta.get("download", {}).get("hash"),
+                "system": slug in system, "managed": True, "instances": {}})
+            mod["instances"][inst] = {
+                "slug": slug, "filename": meta["filename"], "version_id": modrinth.get("version"),
+                "state": jar_state(folder, meta["filename"]) or "missing"}
+        for jar in sorted(folder.glob("*.jar")) + sorted(folder.glob("*.jar.disabled")):
+            if jar.name in known:
+                continue
+            name = jar.name.removesuffix(".disabled")
+            shipped = any((mods_dir(template, i) / name).exists() for i in INSTANCES)  # our autolan mod
+            title, version = jar_info(jar)
+            mod = mods.setdefault(f"jar:{name}", {
+                "id": None, "slug": None, "name": title or name, "version": version, "version_id": None,
+                "filename": name, "sha512": None, "system": shipped, "managed": False, "instances": {}})
+            mod["instances"][inst] = {"filename": name,
+                                      "state": "disabled" if jar.name.endswith(".disabled") else "enabled"}
+    for mod in mods.values():
+        versions = {i.get("version_id") for i in mod["instances"].values()}
+        mod["in_sync"] = len(mod["instances"]) == len(INSTANCES) and len(versions) == 1
+    return mods
+
+
+def find(mods: dict[str, dict], ref: str) -> tuple[str, dict] | None:
+    ref_l = ref.lower()
+    for key, mod in mods.items():
+        if mod["managed"] and ref_l in {str(mod["id"]).lower(), str(mod["slug"]).lower(),
+                                        mod["name"].lower()}:
+            return key, mod
+    return None
+
+
+def side_of(project: dict) -> str:
+    if project.get("server_side") == "unsupported":
+        return "client"
+    if project.get("client_side") == "unsupported":
+        return "server"
+    return "both"
+
+
+def q(value: str) -> str:
+    """A TOML basic string (JSON's escapes are valid TOML)."""
+    return json.dumps(value, ensure_ascii=False)
+
+
+def meta_toml(project: dict, version: dict, file: dict) -> str:
+    def arr(values):
+        return "[ " + ", ".join(q(v) for v in values) + " ]"
+    return "\n".join([
+        f"filename = {q(file['filename'])}",
+        f"name = {q(project['title'])}",
+        f"side = {q(side_of(project))}",
+        f"x-prismlauncher-loaders = {arr(version['loaders'])}",
+        f"x-prismlauncher-mc-versions = {arr(version['game_versions'])}",
+        f"x-prismlauncher-release-type = {q(version['version_type'])}",
+        f"x-prismlauncher-version-number = {q(version['version_number'])}",
+        "",
+        "[download]",
+        f"hash = {q(file['hashes']['sha512'])}",
+        'hash-format = "sha512"',
+        'mode = "url"',
+        f"url = {q(file['url'])}",
+        "",
+        "[update.modrinth]",
+        f"mod-id = {q(project['id'])}",
+        f"version = {q(version['id'])}",
+        "",
+    ])
+
+
+def primary_file(version: dict) -> dict:
+    files = version["files"]
+    return next((f for f in files if f.get("primary")), files[0])
+
+
+def write_mod(data: Path, mods: dict, project: dict, version: dict, jar: bytes) -> None:
+    """Put a mod (new or a new version) into both instances."""
+    file = primary_file(version)
+    old = mods.get(project["id"])
+    for inst in INSTANCES:
+        folder = mods_dir(data, inst)
+        (folder / ".index").mkdir(parents=True, exist_ok=True)
+        prev = old["instances"].get(inst) if old else None
+        disabled = bool(prev and prev.get("state") == "disabled")
+        target = folder / (file["filename"] + (".disabled" if disabled else ""))
+        tmp = folder / (file["filename"] + ".part")
+        tmp.write_bytes(jar)
+        tmp.replace(target)
+        if prev:  # the old version's files, when named differently
+            for name in (prev["filename"], prev["filename"] + ".disabled"):
+                if (folder / name) != target and name != file["filename"]:
+                    (folder / name).unlink(missing_ok=True)
+            if prev.get("slug") and prev["slug"] != project["slug"]:
+                (folder / ".index" / f"{prev['slug']}.pw.toml").unlink(missing_ok=True)
+        (folder / ".index" / f"{project['slug']}.pw.toml").write_text(meta_toml(project, version, file))
+
+
+def delete_mod(data: Path, mod: dict) -> None:
+    for inst, where in mod["instances"].items():
+        folder = mods_dir(data, inst)
+        for name in (where["filename"], where["filename"] + ".disabled"):
+            (folder / name).unlink(missing_ok=True)
+        (folder / ".index" / f"{where['slug']}.pw.toml").unlink(missing_ok=True)
+
+
+def installed_versions(mods: dict) -> list[dict]:
+    ids = sorted({i["version_id"] for m in mods.values() if m["managed"]
+                  for i in m["instances"].values() if i.get("version_id")})
+    if not ids:
+        return []
+    return api("/versions", {"ids": ids}) or []
+
+
+# ------------------------------------------------------------------- commands
+
+def cmd_info(ctx) -> dict:
+    game = Game(ctx.data)
+    return {"minecraft": game.version, "loader": game.loader, "instances": list(INSTANCES),
+            "data": str(ctx.data)}
+
+
+def cmd_list(ctx) -> dict:
+    mods = installed(ctx.data, ctx.template)
+    if ctx.args.icons:  # one request; the list still works offline
+        ids = sorted(m["id"] for m in mods.values() if m["id"])
+        try:
+            icons = {p["id"]: p.get("icon_url") for p in (api("/projects", {"ids": ids}) or [])} if ids else {}
+        except Failure:
+            icons = {}
+        for mod in mods.values():
+            mod["icon_url"] = icons.get(mod["id"]) or None
+    order = sorted(mods.values(), key=lambda m: (not m["managed"], m["name"].lower()))
+    return {"mods": [{k: v for k, v in m.items() if k != "sha512"} for m in order]}
+
+
+def cmd_search(ctx) -> dict:
+    game = Game(ctx.data)
+    facets = [["project_type:mod"], [f"categories:{game.loader}"], [f"versions:{game.version}"],
+              ["client_side:required", "client_side:optional"]]
+    result = api("/search", {"query": ctx.args.text or "", "facets": facets,
+                             "index": ctx.args.sort, "offset": ctx.args.page * PAGE_SIZE,
+                             "limit": PAGE_SIZE})
+    mods = installed(ctx.data, ctx.template)
+    hits = [{
+        "id": h["project_id"], "slug": h["slug"], "name": h["title"],
+        "description": h["description"], "author": h["author"], "downloads": h["downloads"],
+        "icon_url": h.get("icon_url") or None, "categories": h.get("display_categories", []),
+        "installed": h["project_id"] in mods,
+    } for h in result["hits"]]
+    return {"query": ctx.args.text or "", "page": ctx.args.page, "page_size": PAGE_SIZE,
+            "total": result["total_hits"], "hits": hits}
+
+
+def plan_install(game: Game, mods: dict, refs: list[str], also_update: dict | None = None):
+    """Projects and versions to write: refs (not yet installed) and their
+    required dependencies. also_update: {project_id: version} already chosen."""
+    plan: dict[str, tuple[dict, dict]] = {}
+    reasons: dict[str, str | None] = {}
+    todo = [(ref, None) for ref in refs]
+    for pid, version in (also_update or {}).items():
+        project = api(f"/project/{pid}")
+        plan[pid] = (project, version)
+        reasons[pid] = None
+        todo += [(d["project_id"], project["title"]) for d in version["dependencies"]
+                 if d["dependency_type"] == "required" and d.get("project_id")]
+    while todo:
+        ref, needed_by = todo.pop(0)
+        project = api(f"/project/{ref}")
+        if project is None:
+            raise Failure(f"No Modrinth project called {ref}")
+        pid = project["id"]
+        if pid in plan or pid in mods:
+            continue  # planned already, or installed (cmd_install reports asked-for ones)
+        if project["project_type"] != "mod":
+            raise Failure(f"{project['title']} is a {project['project_type']}, not a mod")
+        version = game.compatible_version(pid, project["title"])
+        plan[pid] = (project, version)
+        reasons[pid] = needed_by
+        for dep in version["dependencies"]:
+            if dep["dependency_type"] == "required":
+                dep_pid = dep.get("project_id")
+                if not dep_pid and dep.get("version_id"):
+                    dep_pid = (api(f"/version/{dep['version_id']}") or {}).get("project_id")
+                if dep_pid:
+                    todo.append((dep_pid, project["title"]))
+    # Incompatibilities, both ways
+    names = {pid: p["title"] for pid, (p, _) in plan.items()}
+    names.update({k: m["name"] for k, m in mods.items() if m["managed"]})
+    present = set(plan) | {k for k, m in mods.items() if m["managed"]}
+    declared = [(pid, v) for pid, (_, v) in plan.items()]
+    declared += [(v["project_id"], v) for v in installed_versions(mods) if v["project_id"] not in plan]
+    for owner, version in declared:
+        for dep in version["dependencies"]:
+            if (dep["dependency_type"] == "incompatible" and dep.get("project_id") in present
+                    and (owner in plan or dep["project_id"] in plan)):
+                raise Failure(f"{names.get(owner, owner)} doesn't work together with "
+                              f"{names.get(dep['project_id'], dep['project_id'])}")
+    return plan, reasons
+
+
+def apply_plan(ctx, game: Game, mods: dict, plan, reasons) -> list[dict]:
+    jars = {pid: download(primary_file(v)["url"], primary_file(v)["hashes"]["sha512"])
+            for pid, (_, v) in plan.items()}  # everything downloads before anything changes
+    done = []
+    for pid, (project, version) in plan.items():
+        write_mod(ctx.data, mods, project, version, jars[pid])
+        done.append({"id": pid, "slug": project["slug"], "name": project["title"],
+                     "version": version["version_number"], "required_by": reasons.get(pid)})
+    return done
+
+
+def cmd_install(ctx) -> dict:
+    game = Game(ctx.data)
+    mods = installed(ctx.data, ctx.template)
+    plan, reasons = plan_install(game, mods, ctx.args.projects)
+    already = []
+    for ref in ctx.args.projects:
+        hit = find(mods, ref)
+        if hit:
+            already.append(hit[1]["name"])
+    return {"installed": apply_plan(ctx, game, mods, plan, reasons), "already_installed": already}
+
+
+def cmd_remove(ctx) -> dict:
+    mods = installed(ctx.data, ctx.template)
+    targets = []
+    for ref in ctx.args.projects:
+        hit = find(mods, ref)
+        if not hit:
+            raise Failure(f"{ref} isn't installed (or isn't a Modrinth mod)")
+        key, mod = hit
+        if mod["system"]:
+            raise Failure(f"{mod['name']} comes with the system and can't be removed here")
+        targets.append((key, mod))
+    keys = {k for k, _ in targets}
+    for version in installed_versions(mods):
+        if version["project_id"] in keys:
+            continue
+        for dep in version["dependencies"]:
+            if dep["dependency_type"] == "required" and dep.get("project_id") in keys:
+                owner = mods.get(version["project_id"], {}).get("name", version["project_id"])
+                raise Failure(f"{owner} needs {mods[dep['project_id']]['name']}: remove {owner} first")
+    for _, mod in targets:
+        delete_mod(ctx.data, mod)
+    return {"removed": [{"id": m["id"], "name": m["name"]} for _, m in targets]}
+
+
+def find_updates(game: Game, mods: dict) -> dict[str, dict]:
+    """project id -> newer compatible version, for installed non-system mods."""
+    candidates = {m["sha512"]: k for k, m in mods.items()
+                  if m["managed"] and not m["system"] and m["id"] and m["sha512"]}
+    if not candidates:
+        return {}
+    latest = api("/version_files/update", body={
+        "hashes": list(candidates), "algorithm": "sha512",
+        "loaders": [game.loader], "game_versions": [game.version]}) or {}
+    return {candidates[h]: v for h, v in latest.items()
+            if h in candidates and v["id"] != mods[candidates[h]]["version_id"]}
+
+
+def cmd_updates(ctx) -> dict:
+    game = Game(ctx.data)
+    mods = installed(ctx.data, ctx.template)
+    return {"updates": [{"id": pid, "name": mods[pid]["name"], "version": mods[pid]["version"],
+                         "new_version": v["version_number"]}
+                        for pid, v in find_updates(game, mods).items()]}
+
+
+def cmd_update(ctx) -> dict:
+    game = Game(ctx.data)
+    mods = installed(ctx.data, ctx.template)
+    updates = find_updates(game, mods)
+    if ctx.args.projects:
+        wanted = {}
+        for ref in ctx.args.projects:
+            hit = find(mods, ref)
+            if not hit:
+                raise Failure(f"{ref} isn't installed")
+            if hit[1]["system"]:
+                raise Failure(f"{hit[1]['name']} comes with the system; image updates update it")
+            if hit[0] in updates:
+                wanted[hit[0]] = updates[hit[0]]
+        updates = wanted
+    plan, reasons = plan_install(game, mods, [], also_update=updates)
+    return {"updated": apply_plan(ctx, game, mods, plan, reasons)}
+
+
+def cmd_sync(ctx) -> dict:
+    """Mods with metadata in only one instance (or different versions): give
+    both instances P1's version, or the one instance's that has it."""
+    mods = installed(ctx.data, ctx.template)
+    copied = []
+    for mod in mods.values():
+        if not mod["managed"] or mod["in_sync"]:
+            continue
+        src_inst = INSTANCES[0] if INSTANCES[0] in mod["instances"] else next(iter(mod["instances"]))
+        src = mod["instances"][src_inst]
+        src_dir = mods_dir(ctx.data, src_inst)
+        jar_name = src["filename"] + (".disabled" if src["state"] == "disabled" else "")
+        if src["state"] == "missing":
+            continue  # nothing to copy; a launch downloads it from its metadata
+        for inst in INSTANCES:
+            if inst == src_inst:
+                continue
+            dst_dir = mods_dir(ctx.data, inst)
+            prev = mod["instances"].get(inst)
+            if prev:
+                for name in (prev["filename"], prev["filename"] + ".disabled"):
+                    (dst_dir / name).unlink(missing_ok=True)
+                (dst_dir / ".index" / f"{prev['slug']}.pw.toml").unlink(missing_ok=True)
+            (dst_dir / ".index").mkdir(parents=True, exist_ok=True)
+            (dst_dir / jar_name).write_bytes((src_dir / jar_name).read_bytes())
+            (dst_dir / ".index" / f"{src['slug']}.pw.toml").write_bytes(
+                (src_dir / ".index" / f"{src['slug']}.pw.toml").read_bytes())
+            copied.append({"name": mod["name"], "from": src_inst, "to": inst})
+    return {"copied": copied}
+
+
+# --------------------------------------------------------------------- output
+
+def human(command: str, result: dict) -> str:
+    lines = []
+    if command == "info":
+        lines.append(f"Minecraft {result['minecraft']} with {result['loader']}, "
+                     f"instances {', '.join(result['instances'])} in {result['data']}")
+    elif command == "list":
+        for m in result["mods"]:
+            notes = [n for n, on in (("system", m["system"]), ("no metadata, not managed", not m["managed"]),
+                                     ("NOT IN SYNC", m["managed"] and not m["in_sync"])) if on]
+            notes += sorted({f"{i} {w['state']}" for i, w in m["instances"].items() if w["state"] != "enabled"})
+            where = "+".join(m["instances"])
+            lines.append(f"{m['name']:34} {m['version'] or '':28} {where:6} {', '.join(notes)}")
+    elif command == "search":
+        lines.append(f"{result['total']} mods, page {result['page'] + 1}")
+        for h in result["hits"]:
+            mark = " [installed]" if h["installed"] else ""
+            lines.append(f"{h['slug']:28} {h['name']}{mark}  ({h['downloads']:,} downloads)")
+            lines.append(f"{'':28} {h['description']}")
+    elif command in ("install", "update"):
+        key = "installed" if command == "install" else "updated"
+        for m in result[key]:
+            why = f" (needed by {m['required_by']})" if m.get("required_by") else ""
+            lines.append(f"{key.capitalize()} {m['name']} {m['version']}{why}")
+        for name in result.get("already_installed", []):
+            lines.append(f"Already installed: {name}")
+        if not result[key] and not result.get("already_installed"):
+            lines.append("Nothing to do")
+    elif command == "remove":
+        lines += [f"Removed {m['name']}" for m in result["removed"]]
+    elif command == "updates":
+        lines += [f"{u['name']}: {u['version']} -> {u['new_version']}" for u in result["updates"]]
+        if not result["updates"]:
+            lines.append("Everything is up to date")
+    elif command == "sync":
+        lines += [f"Copied {c['name']} from {c['from']} to {c['to']}" for c in result["copied"]]
+        if not result["copied"]:
+            lines.append("P1 and P2 already have the same mods")
+    return "\n".join(lines)
+
+
+COMMANDS = {"info": cmd_info, "list": cmd_list, "search": cmd_search, "install": cmd_install,
+            "remove": cmd_remove, "updates": cmd_updates, "update": cmd_update, "sync": cmd_sync}
+WRITES = {"install", "remove", "update", "sync"}
+
+
+def main() -> int:
+    common = argparse.ArgumentParser(add_help=False)
+    common.add_argument("--json", action="store_true", default=argparse.SUPPRESS)
+    common.add_argument("--data", type=Path, default=argparse.SUPPRESS)
+    common.add_argument("--template", type=Path, default=argparse.SUPPRESS)
+    parser = argparse.ArgumentParser(description=__doc__.split("\n")[0], parents=[common])
+    sub = parser.add_subparsers(dest="command", required=True)
+    for name in ("info", "updates", "sync"):
+        sub.add_parser(name, parents=[common])
+    sub.add_parser("list", parents=[common]).add_argument(
+        "--icons", action="store_true", help="add each mod's Modrinth icon URL (one request)")
+    s = sub.add_parser("search", parents=[common])
+    s.add_argument("text", nargs="?")
+    s.add_argument("--sort", default="relevance",
+                   choices=["relevance", "downloads", "follows", "newest", "updated"])
+    s.add_argument("--page", type=int, default=0)
+    for name, nargs in (("install", "+"), ("remove", "+"), ("update", "*")):
+        sub.add_parser(name, parents=[common]).add_argument("projects", nargs=nargs)
+    args = parser.parse_args()
+
+    class Ctx:
+        pass
+    ctx = Ctx()
+    ctx.args = args
+    ctx.data = getattr(args, "data", DATA)
+    ctx.template = getattr(args, "template", TEMPLATE)
+    as_json = getattr(args, "json", False)
+
+    try:
+        lock = None
+        if args.command in WRITES:  # one change at a time
+            ctx.data.mkdir(parents=True, exist_ok=True)
+            lock = open(ctx.data / ".batocera-minecraft-mods.lock", "w")
+            fcntl.flock(lock, fcntl.LOCK_EX)
+        result = COMMANDS[args.command](ctx)
+    except Exception as exc:  # Failure: a reported problem; anything else is a bug
+        message = str(exc) if isinstance(exc, Failure) else f"Unexpected error: {exc!r}"
+        print(json.dumps({"error": message}) if as_json else f"Error: {message}",
+              file=sys.stdout if as_json else sys.stderr)
+        return 1
+    print(json.dumps(result, ensure_ascii=False) if as_json else human(args.command, result))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

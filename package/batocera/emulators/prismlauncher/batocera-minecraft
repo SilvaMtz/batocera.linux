@@ -1,7 +1,10 @@
 #!/usr/bin/env python3
 """Launch the Minecraft system's entries through Prism Launcher.
 
-Usage: batocera-minecraft singleplayer | splitscreen | prism | stop
+Usage: batocera-minecraft singleplayer | splitscreen | prism | manage | stop
+       batocera-minecraft menu WORD   (from EmulationStation: WORD is the first
+                                       word of the entry's .minecraft file; an
+                                       unknown one opens Prism Launcher)
 
 Prism keeps its data in /userdata/system/configs/prismlauncher. On first use,
 the P1 and P2 instances are copied from /usr/share/prismlauncher/minecraft and
@@ -31,6 +34,7 @@ from pathlib import Path
 # The overrides let the script be tested over SSH on a stock Batocera
 APPIMAGE = Path(os.environ.get("MINECRAFT_APPIMAGE", "/usr/share/prismlauncher/PrismLauncher.AppImage"))
 TEMPLATE = Path(os.environ.get("MINECRAFT_TEMPLATE", "/usr/share/prismlauncher/minecraft"))
+MANAGER = Path(os.environ.get("MINECRAFT_MANAGER", "/usr/bin/minecraft-manager"))  # Manage Minecraft
 DATA = Path("/userdata/system/configs/prismlauncher")
 LOG = Path("/userdata/system/logs/minecraft.log")
 INSTANCES = ("P1", "P2")
@@ -63,13 +67,13 @@ def reap_children() -> None:
         proc.poll()
 
 
-def prism_pids() -> list[int]:
-    """Live prismlauncher processes (exited ones that are not reaped yet are skipped)."""
+def pids_named(name: str) -> list[int]:
+    """Live processes with this name (exited ones that are not reaped yet are skipped)."""
     reap_children()
     pids = []
     for comm in Path("/proc").glob("[0-9]*/comm"):
         try:
-            if comm.read_text().strip() != "prismlauncher":
+            if comm.read_text().strip() != name[:15]:  # the kernel keeps 15 characters
                 continue
             pid = int(comm.parent.name)
             if alive(pid):
@@ -77,6 +81,10 @@ def prism_pids() -> list[int]:
         except (FileNotFoundError, ProcessLookupError, ValueError):
             continue
     return pids
+
+
+def prism_pids() -> list[int]:
+    return pids_named("prismlauncher")
 
 
 def prism_running() -> bool:
@@ -396,21 +404,37 @@ def prism() -> int:
     return 0
 
 
+def manage() -> int:
+    """Manage Minecraft, the mod manager (it installs into both instances)."""
+    set_autolan(False)
+    if not MANAGER.exists():
+        log(f"{MANAGER} is missing; opening Prism Launcher instead")
+        return prism()
+    return subprocess.run([str(MANAGER)]).returncode
+
+
 def stop() -> int:
     for inst in INSTANCES:
         pid = game_pid(inst)
         if pid:
             os.kill(pid, signal.SIGTERM)
-    for pid in prism_pids():
+    for pid in prism_pids() + pids_named(MANAGER.name):
         os.kill(pid, signal.SIGTERM)
     return 0
 
 
-MODES = {"singleplayer": singleplayer, "splitscreen": splitscreen, "prism": prism, "stop": stop}
+MODES = {"singleplayer": singleplayer, "splitscreen": splitscreen, "prism": prism,
+         "manage": manage, "stop": stop}
+MENU_MODES = ("singleplayer", "splitscreen", "prism", "manage")  # what a menu entry may ask for
 
 
 def main() -> int:
     mode = sys.argv[1] if len(sys.argv) > 1 else "prism"
+    if mode == "menu":
+        entry = sys.argv[2] if len(sys.argv) > 2 else ""
+        mode = entry if entry in MENU_MODES else "prism"
+        if mode != entry:
+            log(f"menu entry asks for {entry!r}, which isn't a menu mode; opening Prism Launcher")
     if mode not in MODES:
         print(__doc__, file=sys.stderr)
         return 2

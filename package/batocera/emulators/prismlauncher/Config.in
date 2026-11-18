@@ -3,10 +3,13 @@ config BR2_PACKAGE_PRISMLAUNCHER
     depends on BR2_x86_64
     depends on BR2_PACKAGE_XORG7
     select BR2_PACKAGE_XDOTOOL
+    select BR2_PACKAGE_MINECRAFT_MANAGER if BR2_PACKAGE_QT6  # Manage Minecraft
     help
       Prism Launcher, the backend of the Minecraft system.
 
       Ships the upstream AppImage plus batocera-minecraft, which
-      launches Single Player, Split Screen and the Prism window.
+      launches Single Player, Split Screen, Manage Minecraft and the
+      Prism window, and batocera-minecraft-mods (Modrinth mods for P1
+      and P2).
 
       https://prismlauncher.org

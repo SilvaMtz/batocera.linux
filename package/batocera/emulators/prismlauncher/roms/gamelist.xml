@@ -17,9 +17,17 @@
 		<players>2</players>
 	</game>
 	<game>
+		<path>./Manage Minecraft.minecraft</path>
+		<name>Manage Minecraft</name>
+		<sortname>3 Manage Minecraft</sortname>
+		<image>./images/manage.png</image>
+		<desc>Install, update and remove mods from Modrinth. Every mod goes to Player 1 and Player 2, so Split Screen keeps working.</desc>
+		<players>1</players>
+	</game>
+	<game>
 		<path>./Prism Launcher.minecraft</path>
 		<name>Prism Launcher</name>
-		<sortname>3 Prism Launcher</sortname>
+		<sortname>4 Prism Launcher</sortname>
 		<image>./images/prism.png</image>
 		<desc>Open Prism Launcher to sign in with a Microsoft account and manage instances.</desc>
 		<players>1</players>

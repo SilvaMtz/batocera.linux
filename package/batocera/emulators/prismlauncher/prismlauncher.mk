@@ -36,6 +36,8 @@ define PRISMLAUNCHER_INSTALL_TARGET_CMDS
 	cp -pr $(PRISMLAUNCHER_PKGDIR)/minecraft $(TARGET_DIR)/usr/share/prismlauncher/
 	$(INSTALL) -D -m 0755 $(PRISMLAUNCHER_PKGDIR)/batocera-minecraft \
 	    $(TARGET_DIR)/usr/bin/batocera-minecraft
+	$(INSTALL) -D -m 0755 $(PRISMLAUNCHER_PKGDIR)/batocera-minecraft-mods \
+	    $(TARGET_DIR)/usr/bin/batocera-minecraft-mods
 	# System art for the default theme (logo, carousel block, wallpaper).
 	# Earlier installs' files go first: the theme shows an .svg logo over a
 	# .png one. (Carbon's own collections/Minecraft.* art is in subfolders.)

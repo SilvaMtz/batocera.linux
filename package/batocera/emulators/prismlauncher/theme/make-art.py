@@ -216,6 +216,11 @@ def main() -> None:
         prism.quad(pts, (rgb[0] // 2 + 70, rgb[1] // 3 + 30, rgb[2] // 2 + 110))  # violet tint
     prism.save_png(IMAGES / "prism.png")
 
+    manage = Canvas(400, 300)
+    for pts, rgb in cube_quads(200, 40, 110, 125, seed=9):
+        manage.quad(pts, (rgb[0] // 2 + 120, rgb[1] // 2 + 85, rgb[2] // 4 + 15))  # gold tint
+    manage.save_png(IMAGES / "manage.png")
+
 
 if __name__ == "__main__":
     main()
