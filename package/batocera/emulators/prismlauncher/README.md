@@ -53,12 +53,39 @@ Iris, Cull Leaves, YACL, FerriteCore; P1 also has LAN World Plug-n-Play
 - No GPU errors with the riser's slot set to **PCIe x16 Link Speed = Gen4** in
   the BIOS. Gen5 over the riser caused GPU hangs (Xid 31/119).
 
-To test the script on a stock system:
+## Iterating without building an image
 
-```
-MINECRAFT_APPIMAGE=/path/PrismLauncher.AppImage MINECRAFT_TEMPLATE=/path/minecraft \
-DISPLAY=:0 python3 batocera-minecraft splitscreen
-```
+Edit in this repo only; the PC just receives copies.
+
+1. **Script only** (seconds): copy `batocera-minecraft` and `minecraft/` to the
+   PC and run a mode over SSH:
+
+   ```
+   MINECRAFT_APPIMAGE=/path/PrismLauncher.AppImage MINECRAFT_TEMPLATE=/path/minecraft \
+   DISPLAY=:0 python3 batocera-minecraft splitscreen
+   ```
+
+2. **Through EmulationStation** (a minute): from the Mac, run
+
+   ```
+   package/batocera/emulators/prismlauncher/dev-deploy.sh [--host root@batocera.local] [--save] [--no-restart]
+   ```
+
+   It copies the script, templates, AppImage (pinned hash), generator,
+   configgen default, Openbox rule and theme to where a build installs them,
+   writes `es_systems_minecraft.cfg` from the `es_systems.yml` entry, copies the
+   menu entries to `/userdata/roms/minecraft` and restarts EmulationStation.
+   Copies to `/usr` and `/etc` are RAM-only unless `--save` runs
+   `batocera-save-overlay`; delete that overlay before installing a real build.
+   Launch from the menu, or over SSH with
+   `curl -d "/userdata/roms/minecraft/Single Player.minecraft" http://127.0.0.1:1234/launch`.
+
+3. **Image build** (hours): at milestones, build the fork and install it on
+   the PC by replacing the boot files; `/userdata` is kept.
+
+Logs: `/userdata/system/logs/minecraft.log`, `es_launch_stdout.log` /
+`es_launch_stderr.log` in the same folder, each instance's
+`minecraft/logs/latest.log`, and `dmesg | grep Xid` for GPU errors.
 
 ## Not done yet
 

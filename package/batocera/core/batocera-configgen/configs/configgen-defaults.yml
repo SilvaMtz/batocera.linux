@@ -395,6 +395,9 @@ megadrive-msu:
 megaduck:
   emulator: libretro
   core:     sameduck
+minecraft:
+  emulator: prismlauncher
+  core:     prismlauncher
 model2:
   emulator: model2emu
   core:     model2emu
