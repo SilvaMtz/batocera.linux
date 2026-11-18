@@ -34,7 +34,7 @@ TEMPLATE = Path(os.environ.get("MINECRAFT_TEMPLATE", "/usr/share/prismlauncher/m
 DATA = Path("/userdata/system/configs/prismlauncher")
 LOG = Path("/userdata/system/logs/minecraft.log")
 INSTANCES = ("P1", "P2")
-P2_OFFLINE_NAME = "Player2"
+P2_OFFLINE_NAME = "Player2"  # only if Prism has no offline account yet
 WINDOW_CLASS = "^com.mojang.minecraft$"
 LAN_RE = re.compile(r"Published LAN server on port (\d+)")
 LAN_PORT = 25565
@@ -184,6 +184,19 @@ def has_microsoft_account() -> bool:
     return bool(accounts) and any(a.get("type") == "MSA" for a in accounts.get("accounts", []))
 
 
+def p2_offline_name() -> str:
+    """Player 2 plays as the first offline account in Prism; one called
+    Player2 is created if there is none. Only called while Prism is closed."""
+    accounts = load_accounts() or {}
+    for account in accounts.get("accounts", []):
+        if account.get("type") == "Offline":
+            name = (account.get("profile") or {}).get("name")
+            if name:
+                return name
+    ensure_offline_account(P2_OFFLINE_NAME)
+    return P2_OFFLINE_NAME
+
+
 def ensure_offline_account(name: str) -> None:
     """Add an offline account to Prism's accounts.json if it is missing.
 
@@ -331,7 +344,7 @@ def splitscreen() -> int:
     if not has_microsoft_account():
         log("no Microsoft account; opening Prism to sign in")
         return prism()
-    ensure_offline_account(P2_OFFLINE_NAME)
+    p2_name = p2_offline_name()
     set_autolan(True)
 
     width, height = screen_size()
@@ -352,7 +365,7 @@ def splitscreen() -> int:
     port = wait_for_lan_port(host_log, p1_pid)
     p2_pid = None
     if port is not None:
-        launch("--launch", "P2", "--profile", P2_OFFLINE_NAME, "--server", f"127.0.0.1:{port}", hidden=True)
+        launch("--launch", "P2", "--profile", p2_name, "--server", f"127.0.0.1:{port}", hidden=True)
         game = wait_for_game("P2", None, GAME_START_TIMEOUT)
         if game is None:
             log("P2 did not start; P1 keeps playing alone")
