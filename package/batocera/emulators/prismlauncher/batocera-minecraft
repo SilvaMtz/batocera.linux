@@ -37,6 +37,8 @@ INSTANCES = ("P1", "P2")
 P2_OFFLINE_NAME = "Player2"
 WINDOW_CLASS = "^com.mojang.minecraft$"
 LAN_RE = re.compile(r"Published LAN server on port (\d+)")
+LAN_PORT = 25565
+AUTOLAN_CONFIG = "batocera-autolan.json"  # read by the batocera_autolan mod in P1
 USER_AGENT = "batocera-minecraft/1.0"
 
 
@@ -111,7 +113,27 @@ def setup_data() -> None:
             cfg.write(f, space_around_delimiters=False)
 
     for inst in INSTANCES:
+        sync_bundled_mods(inst)
         fetch_mods(DATA / "instances" / inst / "minecraft" / "mods")
+
+
+def sync_bundled_mods(inst: str) -> None:
+    """Copy jars shipped in the template (our own mods) when missing or changed."""
+    src = TEMPLATE / "instances" / inst / "minecraft" / "mods"
+    dst = DATA / "instances" / inst / "minecraft" / "mods"
+    for jar in sorted(src.glob("*.jar")):
+        target = dst / jar.name
+        if not target.exists() or target.read_bytes() != jar.read_bytes():
+            dst.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(jar, target)
+            log(f"installed bundled mod {jar.name} in {inst}")
+
+
+def set_autolan(enabled: bool) -> None:
+    """Tell P1's auto-LAN mod whether to open the world to LAN on join."""
+    path = DATA / "instances" / "P1" / "minecraft" / "config" / AUTOLAN_CONFIG
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({"enabled": enabled, "port": LAN_PORT}) + "\n")
 
 
 def fetch_mods(mods_dir: Path) -> None:
@@ -250,6 +272,7 @@ def wait_for_prism_exit(timeout: float = 15) -> None:
 # --------------------------------------------------------------------- modes
 
 def singleplayer() -> int:
+    set_autolan(False)
     width, height = screen_size()
     launcher = launch("--launch", "P1")
     game = wait_for_game("P1", launcher)
@@ -280,6 +303,7 @@ def splitscreen() -> int:
         log("no Microsoft account; opening Prism to sign in")
         return prism()
     ensure_offline_account(P2_OFFLINE_NAME)
+    set_autolan(True)
 
     width, height = screen_size()
     half = width // 2
@@ -295,8 +319,8 @@ def splitscreen() -> int:
     p1_pid, p1_win = game
     place(p1_win, 0, 0, half, height)
 
-    # P1 picks or creates a world and opens it to LAN. P2 joins as soon as
-    # the host log shows the port.
+    # P1 picks or creates a world; the auto-LAN mod opens it to LAN on join
+    # (online mode off). P2 joins as soon as the host log shows the port.
     port = wait_for_lan_port(host_log, p1_pid)
     p2_pid = None
     if port is not None:
@@ -322,6 +346,7 @@ def splitscreen() -> int:
 
 
 def prism() -> int:
+    set_autolan(False)
     proc = launch()
     proc.wait()
     wait_for_prism_exit(timeout=3600)

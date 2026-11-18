@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "id": "batocera_autolan",
+  "version": "1.0.0",
+  "name": "Batocera Auto LAN",
+  "description": "Opens the world to LAN when the player joins, for Batocera's Minecraft Split Screen.",
+  "license": "MIT",
+  "environment": "client",
+  "entrypoints": {
+    "client": ["org.batocera.minecraft.autolan.AutoLan"]
+  },
+  "depends": {
+    "fabricloader": ">=0.18.0",
+    "minecraft": ">=26.3 <27",
+    "fabric-networking-api-v1": "*"
+  }
+}

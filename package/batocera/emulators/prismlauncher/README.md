@@ -11,6 +11,7 @@ windows. Design doc: https://claude.ai/artifact/B9PkUHMB61vRypjDCRRFQw
 | Prism AppImage 11.1.1 (pinned, sha256 in `prismlauncher.hash`) | this package, installed to `/usr/share/prismlauncher/` |
 | Launcher script | `batocera-minecraft`, installed to `/usr/bin/` |
 | Instance templates P1/P2, Prism defaults | `minecraft/`, installed to `/usr/share/prismlauncher/minecraft/` |
+| Auto-LAN mod (source, build script; jar in P1's template) | `autolan/` |
 | configgen generator | `package/batocera/core/batocera-configgen/configgen/configgen/generators/prismlauncher/` |
 | System entry | `minecraft` in `batocera-es-system/es_systems.yml` |
 | Menu entries | `batocera-es-system/roms/minecraft/` (copied to `/userdata/roms/minecraft/` on first boot only) |
@@ -23,11 +24,12 @@ windows. Design doc: https://claude.ai/artifact/B9PkUHMB61vRypjDCRRFQw
 Each `.minecraft` file holds one word, the mode passed to `batocera-minecraft`:
 
 - `singleplayer`: P1 with Prism's default account, full screen.
-- `splitscreen`: P1 (Microsoft account) on the left. When P1 opens its world
-  to LAN, P2 joins with the offline account `Player2` through
-  `--profile Player2 --server 127.0.0.1:<port>` and goes on the right. When one
-  player quits, the other window takes the whole screen. With no Microsoft
-  account yet, Prism's window opens instead.
+- `splitscreen`: P1 (Microsoft account) on the left picks or creates a world.
+  The auto-LAN mod opens it to LAN on port 25565 with online mode off as soon
+  as P1 joins, and P2 joins with the offline account `Player2` through
+  `--profile Player2 --server 127.0.0.1:25565` on the right. When one player
+  quits, the other window takes the whole screen. With no Microsoft account
+  yet, Prism's window opens instead.
 - `prism`: Prism's own window, for Microsoft sign-in and management.
 
 `batocera-minecraft stop` is the hotkey exit.
@@ -37,19 +39,43 @@ Each `.minecraft` file holds one word, the mode passed to `batocera-minecraft`:
 Prism uses `/userdata/system/configs/prismlauncher`. On first use the script
 copies the P1/P2 templates, merges `prismlauncher.cfg` defaults, adds the
 offline account to `accounts.json` (only while Prism is closed) and downloads
-missing mods listed in `mods/.index/*.pw.toml` (sha512 checked). Mod jars,
-resource packs and accounts are never stored in the image.
+missing mods listed in `mods/.index/*.pw.toml` (sha512 checked). Third-party
+mod jars, resource packs and accounts are never stored in the image; only our
+own auto-LAN jar is, and the script copies it into P1 when missing or changed.
 
 Instances: Minecraft 26.3, Fabric 0.20.1, Fabric API, Controlify, Sodium,
-Iris, Cull Leaves, YACL, FerriteCore; P1 also has LAN World Plug-n-Play
-(online mode off, UPnP off, port 25565). Options: GUI scale 2, render distance
-12, F11 unbound, no pause on lost focus. 3 GB heap each.
+Iris, Cull Leaves, YACL, FerriteCore; P1 also has the auto-LAN mod. Options:
+GUI scale 2, render distance 12, F11 unbound, no pause on lost focus. 3 GB
+heap each.
+
+## Auto-LAN mod
+
+`autolan/` is a small Fabric client mod for P1. When the player joins a
+single-player world it turns online mode off and opens the world to LAN, but
+only if `config/batocera-autolan.json` says `"enabled": true`. The script
+writes that file before each launch: enabled for Split Screen, disabled for
+Single Player and the Prism window, so a normal Single Player world is never
+reachable from the network.
+
+Minecraft 26.x is not obfuscated, so it builds with plain `javac` against the
+game jar (no Gradle/Loom):
+
+```
+autolan/build.sh /userdata/system/configs/prismlauncher   # on the PC, after P1 has run once
+```
+
+The jar lands in `minecraft/instances/P1/minecraft/mods/batocera-autolan.jar`;
+commit it with the source.
 
 ## Tested on the target PC (2026-11-17, stock 43.1 + this script over SSH)
 
 - Single Player: full screen 1920x1080, focus returned to EmulationStation on exit.
-- Split Screen: P2 joined P1's world automatically once LAN opened; P1 expanded
-  and rendered full screen when P2 quit; the script exited when P1 quit.
+- Split Screen, launched from EmulationStation: the auto-LAN mod opened P1's
+  world in the second it loaded, P2 joined about 11 seconds later with no menus
+  touched; P1 expanded and rendered full screen when P2 quit; the session
+  returned to EmulationStation when P1 quit.
+- Single Player with the mod installed: the world loaded and nothing listened
+  on port 25565.
 - No GPU errors with the riser's slot set to **PCIe x16 Link Speed = Gen4** in
   the BIOS. Gen5 over the riser caused GPU hangs (Xid 31/119).
 
@@ -89,9 +115,8 @@ Logs: `/userdata/system/logs/minecraft.log`, `es_launch_stdout.log` /
 
 ## Not done yet
 
-- The world does not open to LAN by itself; P1 uses World Options and
-  Apply Changes (that screen is cut off at half width). Planned: a small
-  auto-LAN client mod for P1.
+- Player 1 still picks the world in a half-width window; some vanilla screens
+  (World Options) are cut off at that width.
 - Controllers: Controlify binds a profile to `md5(vendor id + product id + serial)`;
   P2 falls back to the first controller if its own is missing. Set up by hand for now.
 - Manage Minecraft UI, Minecraft Launcher entry and the account pickers.
