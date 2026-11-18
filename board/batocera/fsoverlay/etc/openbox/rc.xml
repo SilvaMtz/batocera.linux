@@ -4,6 +4,9 @@
 		<number>1</number>
 		<firstdesk>1</firstdesk>
 	</desktops>
+	<theme>
+		<name>BatoceraNoBorder</name>
+	</theme>
 	<applications>
 	  <application type="normal">
 	    <fullscreen>yes</fullscreen>
@@ -14,6 +17,10 @@
       </application>
       <application class="Lutris">
         <fullscreen>no</fullscreen>
+      </application>
+      <application class="com.mojang.minecraft">
+        <fullscreen>no</fullscreen>
+        <decor>no</decor>
       </application>
 	</applications>
 </openbox_config>

@@ -1,0 +1,7 @@
+# Openbox theme with no window border, so borderless windows placed side by
+# side (Minecraft Split Screen) show no 1-pixel frame. Everything else falls
+# back to Openbox's built-in defaults.
+border.width: 0
+padding.width: 0
+window.client.padding.width: 0
+window.client.padding.height: 0

@@ -1,0 +1,10 @@
+version:5023
+fullscreen:false
+pauseOnLostFocus:false
+key_key.fullscreen:key.keyboard.unknown
+guiScale:2
+renderDistance:12
+simulationDistance:10
+onboardAccessibility:false
+skipMultiplayerWarning:true
+tutorialStep:none

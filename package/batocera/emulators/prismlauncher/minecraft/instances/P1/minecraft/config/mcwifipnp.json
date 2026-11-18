@@ -1,0 +1,18 @@
+{
+  "port": 25565,
+  "allow-host-commands": false,
+  "max-players": 8,
+  "defaultgamemode": "survival",
+  "personalgamemode": "survival",
+  "forcegamemode": true,
+  "motd": "Minecraft Split Screen",
+  "allow-guest-commands": false,
+  "enforce-whitelist": false,
+  "enable-upnp": false,
+  "online-mode": false,
+  "enable-uuid-fixer": false,
+  "pvp": true,
+  "get-public-ip": false,
+  "multiplayer-scope": "LAN",
+  "apply-for-all-world": true
+}

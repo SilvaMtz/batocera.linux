@@ -1,0 +1,27 @@
+{
+    "components": [
+        {
+            "cachedName": "LWJGL 3",
+            "dependencyOnly": true,
+            "uid": "org.lwjgl3",
+            "version": "3.4.3"
+        },
+        {
+            "cachedName": "Minecraft",
+            "important": true,
+            "uid": "net.minecraft",
+            "version": "26.3"
+        },
+        {
+            "dependencyOnly": true,
+            "uid": "net.fabricmc.intermediary",
+            "version": "26.3"
+        },
+        {
+            "cachedName": "Fabric Loader",
+            "uid": "net.fabricmc.fabric-loader",
+            "version": "0.20.1"
+        }
+    ],
+    "formatVersion": 1
+}

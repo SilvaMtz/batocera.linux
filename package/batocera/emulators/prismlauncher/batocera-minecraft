@@ -1,0 +1,364 @@
+#!/usr/bin/env python3
+"""Launch the Minecraft system's entries through Prism Launcher.
+
+Usage: batocera-minecraft singleplayer | splitscreen | prism | stop
+
+Prism keeps its data in /userdata/system/configs/prismlauncher. On first use,
+the P1 and P2 instances are copied from /usr/share/prismlauncher/minecraft and
+their mods are downloaded from the URLs in mods/.index/*.pw.toml.
+
+Windows are placed with xdotool. Openbox needs the com.mojang.minecraft rule
+in /etc/openbox/rc.xml (borderless, not fullscreen) and a theme with
+border.width 0; Minecraft's own fullscreen is never used.
+"""
+from __future__ import annotations
+
+import configparser
+import hashlib
+import json
+import os
+import re
+import shutil
+import signal
+import subprocess
+import sys
+import time
+import tomllib
+import urllib.request
+import uuid
+from pathlib import Path
+
+# The overrides let the script be tested over SSH on a stock Batocera
+APPIMAGE = Path(os.environ.get("MINECRAFT_APPIMAGE", "/usr/share/prismlauncher/PrismLauncher.AppImage"))
+TEMPLATE = Path(os.environ.get("MINECRAFT_TEMPLATE", "/usr/share/prismlauncher/minecraft"))
+DATA = Path("/userdata/system/configs/prismlauncher")
+LOG = Path("/userdata/system/logs/minecraft.log")
+INSTANCES = ("P1", "P2")
+P2_OFFLINE_NAME = "Player2"
+WINDOW_CLASS = "^com.mojang.minecraft$"
+LAN_RE = re.compile(r"Published LAN server on port (\d+)")
+USER_AGENT = "batocera-minecraft/1.0"
+
+
+def log(msg: str) -> None:
+    LOG.parent.mkdir(parents=True, exist_ok=True)
+    with LOG.open("a") as f:
+        f.write(f"{time.strftime('%H:%M:%S')} {msg}\n")
+
+
+def run(*args: str) -> str:
+    res = subprocess.run(args, capture_output=True, text=True)
+    return res.stdout.strip()
+
+
+# ---------------------------------------------------------------- data setup
+
+_children: list[subprocess.Popen] = []
+
+
+def reap_children() -> None:
+    for proc in _children:
+        proc.poll()
+
+
+def prism_pids() -> list[int]:
+    """Live prismlauncher processes (exited ones that are not reaped yet are skipped)."""
+    reap_children()
+    pids = []
+    for comm in Path("/proc").glob("[0-9]*/comm"):
+        try:
+            if comm.read_text().strip() != "prismlauncher":
+                continue
+            pid = int(comm.parent.name)
+            if alive(pid):
+                pids.append(pid)
+        except (FileNotFoundError, ProcessLookupError, ValueError):
+            continue
+    return pids
+
+
+def prism_running() -> bool:
+    return bool(prism_pids())
+
+
+def setup_data() -> None:
+    """Copy missing instances and settings, then fetch missing mods."""
+    (DATA / "instances").mkdir(parents=True, exist_ok=True)
+    for inst in INSTANCES:
+        dst = DATA / "instances" / inst
+        if not dst.exists():
+            shutil.copytree(TEMPLATE / "instances" / inst, dst)
+            log(f"created instance {inst}")
+
+    cfg_path = DATA / "prismlauncher.cfg"
+    cfg = configparser.RawConfigParser()
+    cfg.optionxform = str  # Prism keys are case sensitive
+    if cfg_path.exists():
+        cfg.read(cfg_path)
+    defaults = configparser.RawConfigParser()
+    defaults.optionxform = str
+    defaults.read(TEMPLATE / "prismlauncher.cfg")
+    changed = False
+    for section in defaults.sections():
+        if not cfg.has_section(section):
+            cfg.add_section(section)
+        for key, value in defaults.items(section):
+            if not cfg.has_option(section, key):
+                cfg.set(section, key, value)
+                changed = True
+    if changed:
+        with cfg_path.open("w") as f:
+            cfg.write(f, space_around_delimiters=False)
+
+    for inst in INSTANCES:
+        fetch_mods(DATA / "instances" / inst / "minecraft" / "mods")
+
+
+def fetch_mods(mods_dir: Path) -> None:
+    for meta_file in sorted((mods_dir / ".index").glob("*.pw.toml")):
+        try:
+            meta = tomllib.loads(meta_file.read_text())
+            jar = mods_dir / meta["filename"]
+            if jar.exists():
+                continue
+            download = meta["download"]
+            req = urllib.request.Request(download["url"], headers={"User-Agent": USER_AGENT})
+            with urllib.request.urlopen(req, timeout=60) as resp:
+                data = resp.read()
+            algo = download.get("hash-format", "sha512")
+            if hashlib.new(algo, data).hexdigest() != download["hash"]:
+                log(f"hash mismatch for {jar.name}, skipped")
+                continue
+            tmp = jar.with_suffix(".part")
+            tmp.write_bytes(data)
+            tmp.replace(jar)
+            log(f"downloaded {jar.name}")
+        except Exception as exc:  # no network on first boot, for example
+            log(f"could not fetch {meta_file.name}: {exc}")
+
+
+# ------------------------------------------------------------------ accounts
+
+def load_accounts() -> dict | None:
+    path = DATA / "accounts.json"
+    if not path.exists():
+        return None
+    return json.loads(path.read_text())
+
+
+def has_microsoft_account() -> bool:
+    accounts = load_accounts()
+    return bool(accounts) and any(a.get("type") == "MSA" for a in accounts.get("accounts", []))
+
+
+def ensure_offline_account(name: str) -> None:
+    """Add an offline account to Prism's accounts.json if it is missing.
+
+    Only called while Prism is not running, since Prism rewrites the file.
+    """
+    path = DATA / "accounts.json"
+    accounts = load_accounts()
+    if accounts is None:
+        return
+    if any((a.get("profile") or {}).get("name") == name for a in accounts.get("accounts", [])):
+        return
+    profile_id = uuid.UUID(bytes=hashlib.md5(f"OfflinePlayer:{name}".encode()).digest(), version=3)
+    accounts.setdefault("accounts", []).append({
+        "type": "Offline",
+        "ygg": {"extra": {"clientToken": uuid.uuid4().hex, "userName": name},
+                "iat": int(time.time()), "token": "0"},
+        "profile": {"id": profile_id.hex, "name": name, "capes": [],
+                    "skin": {"id": "", "url": "", "variant": ""}},
+    })
+    tmp = path.with_suffix(".tmp")
+    tmp.write_text(json.dumps(accounts, indent=4))
+    os.chmod(tmp, 0o600)
+    tmp.replace(path)
+    log(f"added offline account {name}")
+
+
+# ------------------------------------------------------------------- windows
+
+def screen_size() -> tuple[int, int]:
+    out = run("xdotool", "getdisplaygeometry").split()
+    return (int(out[0]), int(out[1])) if len(out) == 2 else (1920, 1080)
+
+
+def game_pid(inst: str) -> int | None:
+    out = run("pgrep", "-f", f"instances/{inst}/natives")
+    return int(out.split()[0]) if out else None
+
+
+def game_window(pid: int) -> str | None:
+    out = run("xdotool", "search", "--all", "--onlyvisible", "--pid", str(pid), "--class", WINDOW_CLASS)
+    return out.split()[0] if out else None
+
+
+def alive(pid: int | None) -> bool:
+    if pid is None:
+        return False
+    try:
+        state = Path(f"/proc/{pid}/stat").read_text().split(") ")[1][0]
+    except (FileNotFoundError, IndexError):
+        return False
+    return state != "Z"
+
+
+def wait_for_game(inst: str, launcher: subprocess.Popen | None, timeout: float = 600) -> tuple[int, str] | None:
+    """Wait for the instance's game process and its visible window."""
+    end = time.time() + timeout
+    while time.time() < end:
+        pid = game_pid(inst)
+        if pid:
+            win = game_window(pid)
+            if win:
+                return pid, win
+        elif launcher is not None and launcher.poll() is not None and not prism_running():
+            return None  # Prism gave up (no account, download failure, ...)
+        time.sleep(1)
+    return None
+
+
+def place(win: str, x: int, y: int, w: int, h: int, focus: bool = True) -> None:
+    run("xdotool", "windowsize", win, str(w), str(h))
+    run("xdotool", "windowmove", win, str(x), str(y))
+    if focus:
+        run("xdotool", "windowactivate", win)
+
+
+def focus_emulationstation() -> None:
+    out = run("xdotool", "search", "--onlyvisible", "--name", "^EmulationStation$")
+    if out:
+        run("xdotool", "windowactivate", out.split()[0])
+
+
+def launch(*args: str) -> subprocess.Popen:
+    cmd = [str(APPIMAGE), "--dir", str(DATA), *args]
+    log("run " + " ".join(cmd))
+    out = LOG.open("a")
+    proc = subprocess.Popen(cmd, stdout=out, stderr=out, stdin=subprocess.DEVNULL, start_new_session=True)
+    _children.append(proc)
+    return proc
+
+
+def wait_for_prism_exit(timeout: float = 15) -> None:
+    end = time.time() + timeout
+    while prism_running() and time.time() < end:
+        time.sleep(0.5)
+
+
+# --------------------------------------------------------------------- modes
+
+def singleplayer() -> int:
+    width, height = screen_size()
+    launcher = launch("--launch", "P1")
+    game = wait_for_game("P1", launcher)
+    if game is None:
+        log("P1 did not start")
+        return 1
+    pid, win = game
+    place(win, 0, 0, width, height)
+    while alive(pid):
+        time.sleep(1)
+    wait_for_prism_exit()
+    return 0
+
+
+def wait_for_lan_port(log_file: Path, host_pid: int) -> int | None:
+    """Follow the host's latest.log until it publishes a LAN port."""
+    while alive(host_pid):
+        if log_file.exists():
+            match = LAN_RE.search(log_file.read_text(errors="replace"))
+            if match:
+                return int(match.group(1))
+        time.sleep(1)
+    return None
+
+
+def splitscreen() -> int:
+    if not has_microsoft_account():
+        log("no Microsoft account; opening Prism to sign in")
+        return prism()
+    ensure_offline_account(P2_OFFLINE_NAME)
+
+    width, height = screen_size()
+    half = width // 2
+    host_log = DATA / "instances" / "P1" / "minecraft" / "logs" / "latest.log"
+    if host_log.exists():
+        host_log.rename(host_log.with_name("previous.log"))
+
+    launcher = launch("--launch", "P1")
+    game = wait_for_game("P1", launcher)
+    if game is None:
+        log("P1 did not start")
+        return 1
+    p1_pid, p1_win = game
+    place(p1_win, 0, 0, half, height)
+
+    # P1 picks or creates a world and opens it to LAN. P2 joins as soon as
+    # the host log shows the port.
+    port = wait_for_lan_port(host_log, p1_pid)
+    p2_pid = None
+    if port is not None:
+        launch("--launch", "P2", "--profile", P2_OFFLINE_NAME, "--server", f"127.0.0.1:{port}")
+        game = wait_for_game("P2", None)
+        if game is not None:
+            p2_pid, p2_win = game
+            place(p2_win, half, 0, width - half, height, focus=False)
+            place(p1_win, 0, 0, half, height)
+
+    # One player quits: the other window takes the whole screen.
+    expanded = False
+    while alive(p1_pid) or alive(p2_pid):
+        if not expanded and alive(p1_pid) != alive(p2_pid):
+            pid = p1_pid if alive(p1_pid) else p2_pid
+            win = game_window(pid)
+            if win:
+                place(win, 0, 0, width, height)
+                expanded = True
+        time.sleep(1)
+    wait_for_prism_exit()
+    return 0
+
+
+def prism() -> int:
+    proc = launch()
+    proc.wait()
+    wait_for_prism_exit(timeout=3600)
+    return 0
+
+
+def stop() -> int:
+    for inst in INSTANCES:
+        pid = game_pid(inst)
+        if pid:
+            os.kill(pid, signal.SIGTERM)
+    for pid in prism_pids():
+        os.kill(pid, signal.SIGTERM)
+    return 0
+
+
+MODES = {"singleplayer": singleplayer, "splitscreen": splitscreen, "prism": prism, "stop": stop}
+
+
+def main() -> int:
+    mode = sys.argv[1] if len(sys.argv) > 1 else "prism"
+    if mode not in MODES:
+        print(__doc__, file=sys.stderr)
+        return 2
+    if mode != "stop":
+        if prism_running():
+            log("Prism already running; stopping it first")
+            stop()
+            wait_for_prism_exit()
+        setup_data()
+    log(f"mode {mode}")
+    try:
+        return MODES[mode]()
+    finally:
+        if mode != "stop":
+            focus_emulationstation()
+
+
+if __name__ == "__main__":
+    sys.exit(main())

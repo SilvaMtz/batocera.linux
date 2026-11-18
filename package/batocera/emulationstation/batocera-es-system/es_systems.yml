@@ -3053,6 +3053,21 @@ flatpak:
           Remova um aplicativo instalado: flatpak remove xmoto
           em seguida, execute batocera-flatpak-update para atualizar o diretório roms de acordo com seus aplicativos instalados.
 
+minecraft:
+  name: Minecraft
+  manufacturer: Mojang Studios
+  release: 2009
+  hardware: pc
+  extensions: [minecraft]
+  platform: pc
+  emulators:
+    prismlauncher:
+      prismlauncher: { requireAnyOf: [BR2_PACKAGE_PRISMLAUNCHER] }
+  comment_en: |
+          Minecraft through Prism Launcher.
+          Sign in with a Microsoft account from the Prism Launcher entry first.
+          Single Player and Split Screen use the P1 and P2 instances in /userdata/system/configs/prismlauncher.
+
 steam:
   name: Steam
   manufacturer: Valve

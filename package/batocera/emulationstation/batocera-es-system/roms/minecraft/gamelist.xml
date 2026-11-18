@@ -1,0 +1,21 @@
+<?xml version="1.0"?>
+<gameList>
+	<game>
+		<path>./Single Player.minecraft</path>
+		<name>Single Player</name>
+		<desc>Play Minecraft full screen with your Microsoft account.</desc>
+		<players>1</players>
+	</game>
+	<game>
+		<path>./Split Screen.minecraft</path>
+		<name>Split Screen</name>
+		<desc>Two players side by side. Player 1 picks a world and opens it to LAN; Player 2 joins automatically with an offline account.</desc>
+		<players>2</players>
+	</game>
+	<game>
+		<path>./Prism Launcher.minecraft</path>
+		<name>Prism Launcher</name>
+		<desc>Open Prism Launcher to sign in with a Microsoft account and manage instances.</desc>
+		<players>1</players>
+	</game>
+</gameList>
