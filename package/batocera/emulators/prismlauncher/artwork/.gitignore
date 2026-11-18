@@ -1,0 +1,5 @@
+# The builder's own pictures stay out of Git (often third-party artwork).
+# Only these instructions are tracked; see README.md for the file names.
+*
+!.gitignore
+!README.md

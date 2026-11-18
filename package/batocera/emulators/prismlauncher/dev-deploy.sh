@@ -53,8 +53,10 @@ cp -R "$PKG_DIR/minecraft" "$STAGE/"
 cp "$OVERLAY/etc/openbox/rc.xml" "$STAGE/"
 cp -R "$OVERLAY/usr/share/themes/BatoceraNoBorder/." "$STAGE/theme/"
 cp "$GEN_DIR"/*.py "$STAGE/generator/"
-cp -R "$ES_DIR/roms/minecraft/." "$STAGE/roms/"
+cp -R "$PKG_DIR/roms/." "$STAGE/roms/"
 cp -R "$PKG_DIR/theme/art" "$STAGE/esart"
+# The builder's own pictures over the drawn defaults, as the image build does
+python3 "$PKG_DIR/apply-artwork.py" "$PKG_DIR/artwork" "$STAGE/esart" "$STAGE/roms"
 # The fork's update guard (official updates would replace this build)
 mkdir -p "$STAGE/scripts"
 cp "$REPO/package/batocera/core/batocera-scripts/scripts/batocera-config" \
@@ -171,11 +173,60 @@ open("/userdata/system/configs/emulationstation/es_systems_minecraft.cfg", "w").
 PY
 
 mkdir -p /userdata/roms/minecraft
+cp /userdata/roms/minecraft/gamelist.xml "$D/old-gamelist.xml" 2>/dev/null || true
+# Replace the entry images: a renamed or reformatted one must not leave the old file
+rm -rf /userdata/roms/minecraft/images
 cp -R "$D/roms/." /userdata/roms/minecraft/
 
-# System art for the default theme, where the package installs it
+# Keep what ES recorded about each entry (play count and time, favorite...):
+# from the old gamelist.xml, and from ES's recovery copies of played entries.
+# ES only uses a recovery copy while gamelist.xml keeps the size it was made
+# against (its parentHash), so a new gamelist.xml would orphan them: merge
+# them in and remove them. The repo's own fields (name, image...) win.
+python3 - <<'PY'
+import glob
+import os
+import xml.etree.ElementTree as ET
+
+GAMELIST = "/userdata/roms/minecraft/gamelist.xml"
+OURS = {"path", "name", "sortname", "desc", "image", "players"}
+
+tree = ET.parse(GAMELIST)
+games = {g.findtext("path"): g for g in tree.getroot().iter("game")}
+sources = ["/tmp/minecraft-deploy/old-gamelist.xml"]
+recovery = sorted(glob.glob("/userdata/system/configs/emulationstation/recovery/minecraft/*.xml"))
+kept = 0
+for f in sources + recovery:  # recovery last: newer than what ES saved
+    if not os.path.exists(f):
+        continue
+    for old in ET.parse(f).getroot().iter("game"):
+        game = games.get(old.findtext("path"))
+        if game is None:
+            continue
+        for el in old:
+            if el.tag in OURS:
+                continue
+            current = game.find(el.tag)
+            if current is not None:
+                game.remove(current)
+            game.append(el)
+            kept += 1
+ET.indent(tree, space="\t")
+tree.write(GAMELIST, encoding="utf-8", xml_declaration=True)
+for f in recovery:
+    os.remove(f)
+if kept or recovery:
+    print(f"Kept {kept} recorded values (play stats etc.); merged and removed {len(recovery)} ES recovery file(s)")
+PY
+
+# System art for the default theme, where the package installs it. Earlier
+# deploys' files go first: the theme picks an .svg logo over a .png one, so a
+# stale minecraft.svg would hide a new minecraft.png. (Carbon's own
+# collections/Minecraft.* art is in subfolders and stays.)
 THEME_ART=/usr/share/emulationstation/themes/es-theme-carbon/art
 if [ -d "$THEME_ART" ]; then
+    find "$THEME_ART/logos" "$THEME_ART/consoles" "$THEME_ART/background" \
+        -maxdepth 1 -type f -name 'minecraft*' -delete 2>/dev/null || true
     cp -R "$D/esart/." "$THEME_ART/"
 fi
 

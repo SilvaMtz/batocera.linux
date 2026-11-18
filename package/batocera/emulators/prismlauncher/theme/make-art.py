@@ -1,11 +1,14 @@
 #!/usr/bin/env python3
-"""Generate the Minecraft system's artwork (original pixel art, no Mojang assets).
+"""Generate the Minecraft system's default artwork (original pixel art, no Mojang assets).
 
 Writes, next to this script:
   art/logos/minecraft.svg, art/logos/minecraft-w.svg  system logo (color / white)
   art/consoles/minecraft.png                          475x450 block for the carousel
   art/background/minecraft.png                        background (convert to .jpg)
-  ../../../emulationstation/batocera-es-system/roms/minecraft/images/*.png  menu entry images
+  ../roms/images/*.png                                menu entry images
+
+These are the defaults. Pictures in ../artwork/ (kept out of Git) replace the
+logo, background and entry images at build time; see ../apply-artwork.py.
 
 ES's SVG renderer can't draw <text>, so the word is built from rectangles in
 a small pixel font. Only the standard library is used; PNGs are written by
@@ -21,7 +24,7 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 # Menu entry images live with the menu entries
-IMAGES = HERE.parents[2] / "emulationstation/batocera-es-system/roms/minecraft/images"
+IMAGES = HERE.parent / "roms/images"
 
 # 5x7 pixel font, only the letters we need
 FONT = {

@@ -13,10 +13,10 @@ windows. Design doc: https://claude.ai/artifact/B9PkUHMB61vRypjDCRRFQw
 | Instance templates P1/P2, Prism defaults | `minecraft/`, installed to `/usr/share/prismlauncher/minecraft/` |
 | Auto-LAN mod (source, build script; jar in P1's template) | `autolan/` |
 | System art (logos, carousel block, background) for es-theme-carbon, and its generator | `theme/`, installed to `/usr/share/emulationstation/themes/es-theme-carbon/art/` |
-| Menu entry images | `batocera-es-system/roms/minecraft/images/` |
+| Your own logo, wallpaper and entry pictures (not in Git) | `artwork/`, applied by `apply-artwork.py` |
 | configgen generator | `package/batocera/core/batocera-configgen/configgen/configgen/generators/prismlauncher/` |
 | System entry | `minecraft` in `batocera-es-system/es_systems.yml` |
-| Menu entries | `batocera-es-system/roms/minecraft/` (copied to `/userdata/roms/minecraft/` on first boot only) |
+| Menu entries and their default images | `roms/`, installed to `/usr/share/batocera/datainit/roms/minecraft/` (copied to `/userdata/roms/minecraft/` on first boot only). Kept in this package rather than `batocera-es-system/roms/` so the pictures can be applied in one place: the two packages install in no fixed order. |
 | Openbox rule and borderless theme | `board/batocera/fsoverlay/etc/openbox/rc.xml`, `board/batocera/fsoverlay/usr/share/themes/BatoceraNoBorder/` |
 | Kconfig | `BR2_PACKAGE_PRISMLAUNCHER`, selected by `BR2_PACKAGE_BATOCERA_MINECRAFT_SYSTEMS` on x86_64 |
 | NVIDIA driver on by default | `nvidia-driver=true` in `batocera-boot.conf` |
@@ -91,10 +91,26 @@ commit it with the source.
 
 ## Artwork
 
-`theme/make-art.py` draws all of it from code: an original pixel-art block and
-a pixel-font "MINECRAFT" built from rectangles (ES's SVG renderer can't draw
-text). No Mojang assets are used. Regenerate with `python3 theme/make-art.py`,
-then convert the background PNG to JPEG as its docstring says.
+Two layers:
+
+- **Drawn defaults**, in Git: `theme/make-art.py` draws the logo, carousel
+  block, background and entry images from code (original pixel art, no
+  Mojang assets) into `theme/art/` and `roms/images/`. Regenerate with
+  `python3 theme/make-art.py`.
+- **Your own pictures**, not in Git: `artwork/` holds pictures with fixed
+  names (`minecraft_Logo.png`, `minecraft_Wallpaper.jpg`,
+  `minecraft_<Title>.jpg` per menu entry; `artwork/README.md` has the list).
+  `apply-artwork.py` puts them over the defaults. The image build runs it in
+  the package's build step and `dev-deploy.sh` before copying; both print
+  which pictures were used. The folder's `.gitignore` keeps everything but
+  its README out of Git, so third-party artwork stays on the build machine.
+
+Carbon's default wallpaper style ("consoles") fills the screen with
+`art/background/<system>.jpg` and puts its own fade overlay (`art/backfade.png`) on top.
+For logos it tries `<system>.png`, `<system>.svg` and then the `-w` (for dark
+backgrounds) versions; the last one that exists wins, so a PNG logo only shows
+when there is no SVG of the same name. The default system view
+("darkened") uses only the `-w` files.
 
 ## Checked against the build's own tools (2026-11-17)
 
