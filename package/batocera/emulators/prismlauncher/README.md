@@ -12,6 +12,8 @@ windows. Design doc: https://claude.ai/artifact/B9PkUHMB61vRypjDCRRFQw
 | Launcher script | `batocera-minecraft`, installed to `/usr/bin/` |
 | Instance templates P1/P2, Prism defaults | `minecraft/`, installed to `/usr/share/prismlauncher/minecraft/` |
 | Auto-LAN mod (source, build script; jar in P1's template) | `autolan/` |
+| System art (logos, carousel block, background) for es-theme-carbon, and its generator | `theme/`, installed to `/usr/share/emulationstation/themes/es-theme-carbon/art/` |
+| Menu entry images | `batocera-es-system/roms/minecraft/images/` |
 | configgen generator | `package/batocera/core/batocera-configgen/configgen/configgen/generators/prismlauncher/` |
 | System entry | `minecraft` in `batocera-es-system/es_systems.yml` |
 | Menu entries | `batocera-es-system/roms/minecraft/` (copied to `/userdata/roms/minecraft/` on first boot only) |
@@ -34,10 +36,18 @@ Each `.minecraft` file holds one word, the mode passed to `batocera-minecraft`:
 
 `batocera-minecraft stop` is the hotkey exit.
 
+For Single Player and Split Screen, Prism runs with `QT_QPA_PLATFORM=offscreen`:
+it works but draws no window, so nothing flashes before the game. If a game
+does not appear within 4 minutes (Prism stuck on a hidden dialog, such as an
+expired sign-in), the script closes it and opens Prism visibly instead. The
+Prism Launcher entry always shows Prism.
+
 ## Data
 
-Prism uses `/userdata/system/configs/prismlauncher`. On first use the script
-copies the P1/P2 templates, merges `prismlauncher.cfg` defaults, adds the
+Prism uses `/userdata/system/configs/prismlauncher`. On each launch the script
+copies missing P1/P2 templates, merges `prismlauncher.cfg` defaults, forces
+`auto_check=false` in `prismlauncher_update.cfg` (the AppImage is pinned, so
+Prism must never update itself), adds the
 offline account to `accounts.json` (only while Prism is closed) and downloads
 missing mods listed in `mods/.index/*.pw.toml` (sha512 checked). Third-party
 mod jars, resource packs and accounts are never stored in the image; only our
@@ -78,6 +88,22 @@ commit it with the source.
   on port 25565.
 - No GPU errors with the riser's slot set to **PCIe x16 Link Speed = Gen4** in
   the BIOS. Gen5 over the riser caused GPU hangs (Xid 31/119).
+
+## Artwork
+
+`theme/make-art.py` draws all of it from code: an original pixel-art block and
+a pixel-font "MINECRAFT" built from rectangles (ES's SVG renderer can't draw
+text). No Mojang assets are used. Regenerate with `python3 theme/make-art.py`,
+then convert the background PNG to JPEG as its docstring says.
+
+## Checked against the build's own tools (2026-11-17)
+
+- `python-src/batocera-es-system` (the build's ES config generator), run on
+  the Mac with every emulator info file and x86_64's configgen defaults,
+  produces the expected `minecraft` system, default emulator/core and menu
+  entries.
+- The Kconfig tree parses, and on x86_64 the chain all systems → Minecraft
+  systems → `prismlauncher` → `xdotool` resolves to `y`.
 
 ## Iterating without building an image
 
@@ -120,5 +146,4 @@ Logs: `/userdata/system/logs/minecraft.log`, `es_launch_stdout.log` /
 - Controllers: Controlify binds a profile to `md5(vendor id + product id + serial)`;
   P2 falls back to the first controller if its own is missing. Set up by hand for now.
 - Manage Minecraft UI, Minecraft Launcher entry and the account pickers.
-- Prism's main window and a progress dialog show briefly while a game starts.
 - The image has not been built yet (no build machine set up).

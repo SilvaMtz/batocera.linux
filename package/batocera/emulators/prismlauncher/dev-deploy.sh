@@ -53,7 +53,8 @@ cp -R "$PKG_DIR/minecraft" "$STAGE/"
 cp "$OVERLAY/etc/openbox/rc.xml" "$STAGE/"
 cp -R "$OVERLAY/usr/share/themes/BatoceraNoBorder/." "$STAGE/theme/"
 cp "$GEN_DIR"/*.py "$STAGE/generator/"
-cp "$ES_DIR/roms/minecraft/"* "$STAGE/roms/"
+cp -R "$ES_DIR/roms/minecraft/." "$STAGE/roms/"
+cp -R "$PKG_DIR/theme/art" "$STAGE/esart"
 # The minecraft entries of es_systems.yml and configgen-defaults.yml
 # (each up to the next top-level key)
 yaml_block() { awk '/^minecraft:$/ {f = 1; print; next} f && /^[A-Za-z0-9_-]+:/ {exit} f' "$1"; }
@@ -162,7 +163,13 @@ open("/userdata/system/configs/emulationstation/es_systems_minecraft.cfg", "w").
 PY
 
 mkdir -p /userdata/roms/minecraft
-cp "$D"/roms/* /userdata/roms/minecraft/
+cp -R "$D/roms/." /userdata/roms/minecraft/
+
+# System art for the default theme, where the package installs it
+THEME_ART=/usr/share/emulationstation/themes/es-theme-carbon/art
+if [ -d "$THEME_ART" ]; then
+    cp -R "$D/esart/." "$THEME_ART/"
+fi
 
 if [ "$SAVE" = 1 ]; then
     batocera-save-overlay
@@ -172,7 +179,7 @@ if [ "$RESTART" = 1 ]; then
 fi
 
 echo "Installed: /usr/bin/batocera-minecraft, /usr/share/prismlauncher, $CONFIGGEN/generators/prismlauncher, configgen defaults,"
-echo "           /etc/openbox/rc.xml, BatoceraNoBorder theme, /userdata/roms/minecraft, es_systems_minecraft.cfg"
+echo "           /etc/openbox/rc.xml, BatoceraNoBorder theme, carbon theme art, /userdata/roms/minecraft, es_systems_minecraft.cfg"
 [ "$SAVE" = 1 ] && echo "Saved to the overlay (survives reboot)." || echo "RAM only: lost on reboot (use --save to keep)."
 [ "$RESTART" = 1 ] && echo "Restarting EmulationStation."
 rm -rf "$D"

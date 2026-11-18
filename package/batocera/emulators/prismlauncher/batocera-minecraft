@@ -92,29 +92,40 @@ def setup_data() -> None:
             shutil.copytree(TEMPLATE / "instances" / inst, dst)
             log(f"created instance {inst}")
 
-    cfg_path = DATA / "prismlauncher.cfg"
+    # Defaults the user may change in Prism
+    merge_cfg("prismlauncher.cfg", force=False)
+    # The AppImage is pinned by the image: Prism must never update itself
+    merge_cfg("prismlauncher_update.cfg", force=True)
+
+    for inst in INSTANCES:
+        sync_bundled_mods(inst)
+        fetch_mods(DATA / "instances" / inst / "minecraft" / "mods")
+
+
+def merge_cfg(name: str, force: bool) -> None:
+    """Merge a template INI file into Prism's copy.
+
+    force=False only adds missing keys; force=True also overwrites changed ones.
+    """
+    cfg_path = DATA / name
     cfg = configparser.RawConfigParser()
     cfg.optionxform = str  # Prism keys are case sensitive
     if cfg_path.exists():
         cfg.read(cfg_path)
     defaults = configparser.RawConfigParser()
     defaults.optionxform = str
-    defaults.read(TEMPLATE / "prismlauncher.cfg")
+    defaults.read(TEMPLATE / name)
     changed = False
     for section in defaults.sections():
         if not cfg.has_section(section):
             cfg.add_section(section)
         for key, value in defaults.items(section):
-            if not cfg.has_option(section, key):
+            if not cfg.has_option(section, key) or (force and cfg.get(section, key) != value):
                 cfg.set(section, key, value)
                 changed = True
     if changed:
         with cfg_path.open("w") as f:
             cfg.write(f, space_around_delimiters=False)
-
-    for inst in INSTANCES:
-        sync_bundled_mods(inst)
-        fetch_mods(DATA / "instances" / inst / "minecraft" / "mods")
 
 
 def sync_bundled_mods(inst: str) -> None:
@@ -254,11 +265,18 @@ def focus_emulationstation() -> None:
         run("xdotool", "windowactivate", out.split()[0])
 
 
-def launch(*args: str) -> subprocess.Popen:
+def launch(*args: str, hidden: bool = False) -> subprocess.Popen:
+    """Run Prism. hidden=True uses Qt's offscreen platform: Prism works but
+    draws no window (no progress dialog flashing before the game). The game
+    is a separate Java process and opens its own window as usual."""
     cmd = [str(APPIMAGE), "--dir", str(DATA), *args]
-    log("run " + " ".join(cmd))
+    log(("run (hidden) " if hidden else "run ") + " ".join(cmd))
+    env = dict(os.environ)
+    if hidden:
+        env["QT_QPA_PLATFORM"] = "offscreen"
     out = LOG.open("a")
-    proc = subprocess.Popen(cmd, stdout=out, stderr=out, stdin=subprocess.DEVNULL, start_new_session=True)
+    proc = subprocess.Popen(cmd, stdout=out, stderr=out, stdin=subprocess.DEVNULL,
+                            start_new_session=True, env=env)
     _children.append(proc)
     return proc
 
@@ -271,14 +289,25 @@ def wait_for_prism_exit(timeout: float = 15) -> None:
 
 # --------------------------------------------------------------------- modes
 
+# A hidden Prism can't show a problem (an expired sign-in, for example), so a
+# game that does not appear in this time reopens Prism visibly instead.
+GAME_START_TIMEOUT = 240
+
+
+def show_failure(inst: str) -> int:
+    log(f"{inst} did not start; opening Prism so the problem can be seen")
+    stop()
+    wait_for_prism_exit()
+    return prism()
+
+
 def singleplayer() -> int:
     set_autolan(False)
     width, height = screen_size()
-    launcher = launch("--launch", "P1")
-    game = wait_for_game("P1", launcher)
+    launcher = launch("--launch", "P1", hidden=True)
+    game = wait_for_game("P1", launcher, GAME_START_TIMEOUT)
     if game is None:
-        log("P1 did not start")
-        return 1
+        return show_failure("P1")
     pid, win = game
     place(win, 0, 0, width, height)
     while alive(pid):
@@ -311,11 +340,10 @@ def splitscreen() -> int:
     if host_log.exists():
         host_log.rename(host_log.with_name("previous.log"))
 
-    launcher = launch("--launch", "P1")
-    game = wait_for_game("P1", launcher)
+    launcher = launch("--launch", "P1", hidden=True)
+    game = wait_for_game("P1", launcher, GAME_START_TIMEOUT)
     if game is None:
-        log("P1 did not start")
-        return 1
+        return show_failure("P1")
     p1_pid, p1_win = game
     place(p1_win, 0, 0, half, height)
 
@@ -324,9 +352,11 @@ def splitscreen() -> int:
     port = wait_for_lan_port(host_log, p1_pid)
     p2_pid = None
     if port is not None:
-        launch("--launch", "P2", "--profile", P2_OFFLINE_NAME, "--server", f"127.0.0.1:{port}")
-        game = wait_for_game("P2", None)
-        if game is not None:
+        launch("--launch", "P2", "--profile", P2_OFFLINE_NAME, "--server", f"127.0.0.1:{port}", hidden=True)
+        game = wait_for_game("P2", None, GAME_START_TIMEOUT)
+        if game is None:
+            log("P2 did not start; P1 keeps playing alone")
+        else:
             p2_pid, p2_win = game
             place(p2_win, half, 0, width - half, height, focus=False)
             place(p1_win, 0, 0, half, height)
