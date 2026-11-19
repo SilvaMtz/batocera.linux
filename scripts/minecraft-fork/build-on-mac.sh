@@ -28,6 +28,11 @@
 #     descriptor". build-image/ adds a make wrapper on top of
 #     batocera-local/build-43 (as batocera-local/build-43-mac); see
 #     build-image/make-wrapper.
+#   * GCC's link-time optimizer reads the same job-sharing numbers from
+#     MAKEFLAGS and crashed in amiberry ("internal compiler error: in
+#     return_token"). The make wrapper handles that too. (Not on this
+#     script's make command line: Buildroot doesn't pass command-line
+#     variables to the packages' own builds.)
 #   * Rosetta ignores mmap's MAP_32BIT. The build's own Mono (host-mono)
 #     counts on it for short jumps on x86_64 Linux and aborted with "should
 #     not be reached at tramp-amd64.c". It is built like Mono on every other
@@ -51,7 +56,7 @@ while [ $# -gt 0 ]; do
     case "$1" in
         --clean) CLEAN=1; shift ;;
         --log) LOG="$2"; shift 2 ;;
-        -h|--help) sed -n '2,26p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+        -h|--help) sed -n '2,/^[^#]/{/^#/p;}' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
         -*) echo "unknown option $1" >&2; exit 2 ;;
         *) PKGS+=("$1"); shift ;;
     esac

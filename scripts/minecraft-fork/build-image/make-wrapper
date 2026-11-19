@@ -20,4 +20,23 @@ if [[ $MAKEFLAGS =~ --jobserver-(auth|fds)=([0-9]+),([0-9]+) ]]; then
         export MAKEFLAGS="${MAKEFLAGS/"${BASH_REMATCH[0]}"/}"
     fi
 fi
+
+# GCC's link-time optimizer reads the same numbers from MAKEFLAGS in every
+# compile and link command, and crashed the same way ("internal compiler
+# error: in return_token"). GCC uses the *last* --jobserver-auth in
+# MAKEFLAGS, and every gcc/g++ call removes one it can't use before passing
+# MAKEFLAGS on. So each make gets three unused variables whose values look
+# like an unusable --jobserver-auth. make passes them to its commands after
+# its own --jobserver-auth, and GCC uses its own threads instead, as it does
+# natively when the numbers aren't open.
+if [[ $MAKEFLAGS != *MAC_NO_LTO_JOBSERVER_1=* ]]; then
+    no_lto_js="MAC_NO_LTO_JOBSERVER_1=--jobserver-auth=-1,-1"
+    no_lto_js+=" MAC_NO_LTO_JOBSERVER_2=--jobserver-auth=-1,-1"
+    no_lto_js+=" MAC_NO_LTO_JOBSERVER_3=--jobserver-auth=-1,-1"
+    if [[ " $MAKEFLAGS " == *" -- "* ]]; then
+        export MAKEFLAGS="$MAKEFLAGS $no_lto_js"
+    else
+        export MAKEFLAGS="$MAKEFLAGS -- $no_lto_js"
+    fi
+fi
 exec -a "$0" /usr/bin/make.real "$@"
