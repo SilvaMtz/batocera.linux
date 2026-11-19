@@ -89,7 +89,12 @@ RUN=(docker run -t --init --rm --platform linux/amd64
      -w /x86_64
      -v /etc/passwd:/etc/passwd:ro -v /etc/group:/etc/group:ro
      -u "$U:$G" "$IMAGE")
-BR=(make O=/x86_64 BR2_EXTERNAL=/build -C /build/buildroot)
+# fluidsynth builds a helper with a nested "cmake --build". That make sees
+# the parent's job-sharing descriptors in MAKEFLAGS but doesn't get them;
+# under Rosetta those numbers belong to other files, and the build stops
+# with "write jobserver: Bad file descriptor". One job avoids job sharing.
+BR=(make O=/x86_64 BR2_EXTERNAL=/build -C /build/buildroot
+    FLUIDSYNTH_BUILD_OPTS=-j1)
 
 echo "build started $(date '+%Y-%m-%d %H:%M') at $(git -C "$REPO" rev-parse --short HEAD) ${PKGS[*]:-(full)}" > "$LOG"
 echo "Logging to $LOG"
