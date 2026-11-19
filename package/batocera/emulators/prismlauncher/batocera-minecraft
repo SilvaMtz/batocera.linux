@@ -366,11 +366,16 @@ def splitscreen() -> int:
     if game is None:
         return show_failure("P1")
     p1_pid, p1_win = game
-    place(p1_win, 0, 0, half, height)
+    # P1 picks or creates a world in full screen: the menus fit, and there is
+    # no empty half while P2 isn't running yet. The screen splits once P2's
+    # window appears.
+    place(p1_win, 0, 0, width, height)
 
-    # P1 picks or creates a world; the auto-LAN mod opens it to LAN on join
-    # (online mode off). P2 joins as soon as the host log shows the port.
+    # The auto-LAN mod opens P1's world to LAN on join (online mode off).
+    # P2 joins as soon as the host log shows the port.
     port = wait_for_lan_port(host_log, p1_pid)
+    if port is not None:
+        log(f"P1 opened its world on port {port}; starting P2")
     p2_pid = None
     if port is not None:
         launch("--launch", "P2", "--profile", p2_name, "--server", f"127.0.0.1:{port}", hidden=True)

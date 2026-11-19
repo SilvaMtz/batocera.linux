@@ -31,12 +31,13 @@ unknown word, or `stop`, opens Prism Launcher), so a new entry only touches
 this package:
 
 - `singleplayer`: P1 with Prism's default account, full screen.
-- `splitscreen`: P1 (Microsoft account) on the left picks or creates a world.
-  The auto-LAN mod opens it to LAN on port 25565 with online mode off as soon
-  as P1 joins, and P2 joins with the offline account `Player2` through
-  `--profile Player2 --server 127.0.0.1:25565` on the right. When one player
-  quits, the other window takes the whole screen. With no Microsoft account
-  yet, Prism's window opens instead.
+- `splitscreen`: P1 (Microsoft account) picks or creates a world in full
+  screen. The auto-LAN mod opens it to LAN on port 25565 with online mode off
+  as soon as P1 joins, and P2 starts with the offline account through
+  `--profile NAME --server 127.0.0.1:25565`. When P2's window appears, the
+  screen splits: P1 on the left, P2 on the right. Until P1 is in a world, P2
+  isn't running. When one player quits, the other window takes the whole
+  screen. With no Microsoft account yet, Prism's window opens instead.
 - `manage`: Manage Minecraft, the mod manager (below).
 - `prism`: Prism's own window, for Microsoft sign-in and management.
 
@@ -198,8 +199,6 @@ Logs: `/userdata/system/logs/minecraft.log`, `es_launch_stdout.log` /
 
 ## Not done yet
 
-- Player 1 still picks the world in a half-width window; some vanilla screens
-  (World Options) are cut off at that width.
 - Controllers: Controlify binds a profile to `md5(vendor id + product id + serial)`;
   P2 falls back to the first controller if its own is missing. Set up by hand for now.
 - Minecraft Launcher entry and the account pickers.
