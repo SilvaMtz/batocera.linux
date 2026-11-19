@@ -38,4 +38,9 @@ define IKEMEN_INSTALL_TARGET_CMDS
 endef
 
 $(eval $(golang-package))
+# go.mod pins a revision of github.com/ikemen-engine/beep that is gone from
+# GitHub; Go's module proxy still has it. (After the eval, so it wins over
+# the golang-package's GOPROXY=direct.)
+IKEMEN_DL_ENV += GOPROXY=https://proxy.golang.org,direct
+
 $(eval $(emulator-info-package))

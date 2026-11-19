@@ -19,3 +19,7 @@ define RCLONE_INSTALL_TARGET_CMDS
 endef
 
 $(eval $(golang-package))
+# One of rclone's modules, goftp.io/server/v2, is no longer served from
+# goftp.io; Go's module proxy still has it. (After the eval, so it wins over
+# the golang-package's GOPROXY=direct.)
+RCLONE_DL_ENV += GOPROXY=https://proxy.golang.org,direct
