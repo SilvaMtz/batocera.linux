@@ -23,6 +23,15 @@
 #   * Rust packages resolve crates at download time when they have no
 #     Cargo.lock; CARGO_RESOLVER_INCOMPATIBLE_RUST_VERSIONS=fallback keeps
 #     them compatible with 43.1's rustc (newest crates need a newer one).
+#   * Under Rosetta, a make started by something other than make (fluidsynth's
+#     and Kodi's nested builds) stopped with "write jobserver: Bad file
+#     descriptor". build-image/ adds a make wrapper on top of
+#     batocera-local/build-43 (as batocera-local/build-43-mac); see
+#     build-image/make-wrapper.
+#   * Rosetta ignores mmap's MAP_32BIT. The build's own Mono (host-mono)
+#     counts on it for short jumps on x86_64 Linux and aborted with "should
+#     not be reached at tramp-amd64.c". It is built like Mono on every other
+#     system, with MONO_ARCH_NOMAP32BIT. The PC's Mono is unchanged.
 #
 # The images end up in the batocera-x86_64 volume under
 # /x86_64/images/batocera/images/x86_64/; install-image.sh sends them to the PC.
@@ -30,6 +39,7 @@ set -euo pipefail
 
 REPO="$(git -C "$(dirname "$0")" rev-parse --show-toplevel)"
 IMAGE="batocera-local/build-43:latest"
+MAC_IMAGE="batocera-local/build-43-mac:latest"
 OUT_VOL="batocera-x86_64"
 DL_VOL="batocera-dl"
 CCACHE_VOL="batocera-ccache"
@@ -58,6 +68,9 @@ if ! docker image inspect "$IMAGE" >/dev/null 2>&1; then
     echo "Building $IMAGE from the fork's Dockerfile (a few minutes)..."
     docker build --platform linux/amd64 -t "$IMAGE" "$REPO"
 fi
+# ...plus the make wrapper for Rosetta (Docker's cache makes this instant)
+docker build -q --platform linux/amd64 --build-arg BASE="$IMAGE" \
+    -t "$MAC_IMAGE" "$REPO/scripts/minecraft-fork/build-image" >/dev/null
 
 # 2. Volumes owned by this user, never left empty
 U="$(id -u)"; G="$(id -g)"
@@ -88,13 +101,10 @@ RUN=(docker run -t --init --rm --platform linux/amd64
      -v "$CCACHE_VOL:$HOME/.buildroot-ccache"
      -w /x86_64
      -v /etc/passwd:/etc/passwd:ro -v /etc/group:/etc/group:ro
-     -u "$U:$G" "$IMAGE")
-# fluidsynth builds a helper with a nested "cmake --build". That make sees
-# the parent's job-sharing descriptors in MAKEFLAGS but doesn't get them;
-# under Rosetta those numbers belong to other files, and the build stops
-# with "write jobserver: Bad file descriptor". One job avoids job sharing.
+     -u "$U:$G" "$MAC_IMAGE")
 BR=(make O=/x86_64 BR2_EXTERNAL=/build -C /build/buildroot
-    FLUIDSYNTH_BUILD_OPTS=-j1)
+    # host-mono without MAP_32BIT (see above); make expands $(HOST_CPPFLAGS)
+    'HOST_MONO_CONF_ENV=CPPFLAGS="$(HOST_CPPFLAGS) -DMONO_ARCH_NOMAP32BIT=1"')
 
 echo "build started $(date '+%Y-%m-%d %H:%M') at $(git -C "$REPO" rev-parse --short HEAD) ${PKGS[*]:-(full)}" > "$LOG"
 echo "Logging to $LOG"

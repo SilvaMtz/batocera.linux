@@ -1,0 +1,23 @@
+#!/bin/bash
+# Installed as /usr/bin/make in the Mac build image; GNU make 4.3 itself is
+# /usr/bin/make.real.
+#
+# make shares its job slots with sub-makes through a pipe whose two
+# descriptor numbers it writes into MAKEFLAGS (--jobserver-auth=R,W). It
+# only keeps the descriptors open for recipes it recognises as a sub-make.
+# A make started any other way ("cmake --build", a plain "make" inside a
+# script) still reads the numbers. On native Linux they are closed, so it
+# builds without the shared slots. Under Rosetta they are usually Rosetta's
+# own read-only files, and that make stops with "write jobserver: Bad file
+# descriptor".
+#
+# So: unless both numbers are the same pipe, drop the setting. That make
+# then starts its own job slots from the -jN still in MAKEFLAGS.
+if [[ $MAKEFLAGS =~ --jobserver-(auth|fds)=([0-9]+),([0-9]+) ]]; then
+    r=/proc/$$/fd/${BASH_REMATCH[2]}
+    w=/proc/$$/fd/${BASH_REMATCH[3]}
+    if ! [[ -p $r && $r -ef $w ]]; then
+        export MAKEFLAGS="${MAKEFLAGS/"${BASH_REMATCH[0]}"/}"
+    fi
+fi
+exec -a "$0" /usr/bin/make.real "$@"
