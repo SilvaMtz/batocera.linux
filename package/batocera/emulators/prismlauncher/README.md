@@ -31,13 +31,14 @@ unknown word, or `stop`, opens Prism Launcher), so a new entry only touches
 this package:
 
 - `singleplayer`: P1 with Prism's default account, full screen.
-- `splitscreen`: P1 (Microsoft account) picks or creates a world in full
-  screen. The auto-LAN mod opens it to LAN on port 25565 with online mode off
-  as soon as P1 joins, and P2 starts with the offline account through
-  `--profile NAME --server 127.0.0.1:25565`. When P2's window appears, the
-  screen splits: P1 on the left, P2 on the right. Until P1 is in a world, P2
-  isn't running. When one player quits, the other window takes the whole
-  screen. With no Microsoft account yet, Prism's window opens instead.
+- `splitscreen`: both players start together, side by side: P1 (Microsoft
+  account) on the left, P2 (`--profile NAME`, the offline account) on the
+  right. P2 is requested once P1's game process exists, so P1's Prism is up
+  and takes the request. P1 picks or creates a world; the auto-LAN mod opens
+  it to LAN on port 25565 with online mode off as soon as P1 joins, and P2
+  joins it from Multiplayer, where it shows under the LAN worlds. When one
+  player quits, the other window takes the whole screen. With no Microsoft
+  account yet, Prism's window opens instead.
 - `manage`: Manage Minecraft, the mod manager (below).
 - `prism`: Prism's own window, for Microsoft sign-in and management.
 
@@ -125,7 +126,10 @@ commit it with the source.
 - Split Screen, launched from EmulationStation: the auto-LAN mod opened P1's
   world in the second it loaded, P2 joined about 11 seconds later with no menus
   touched; P1 expanded and rendered full screen when P2 quit; the session
-  returned to EmulationStation when P1 quit.
+  returned to EmulationStation when P1 quit. (P2 then started only after P1's
+  world opened, with `--server`. Since 2026-11-20 both start together and P2
+  joins from the LAN list: both title screens were up, side by side, 13
+  seconds after launch, and P2 joined P1's world from the LAN list.)
 - Single Player with the mod installed: the world loaded and nothing listened
   on port 25565.
 - No GPU errors with the riser's slot set to **PCIe x16 Link Speed = Gen4** in
