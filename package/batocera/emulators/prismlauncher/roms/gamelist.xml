@@ -21,7 +21,7 @@
 		<name>Manage Minecraft</name>
 		<sortname>3 Manage Minecraft</sortname>
 		<image>./images/manage.png</image>
-		<desc>Install, update and remove mods from Modrinth. Every mod goes to Player 1 and Player 2, so Split Screen keeps working.</desc>
+		<desc>Install, update and remove mods, resource packs and shaders from Modrinth. Everything goes to Player 1 and Player 2, so Split Screen keeps working.</desc>
 		<players>1</players>
 	</game>
 	<game>

@@ -12,6 +12,8 @@
 //   X                   Key_Backspace
 //   Y                   Key_Search    ('/' on a keyboard)
 //   LB / RB             Key_Backtab / Key_Tab   switch tabs
+//   L2 / R2             Key_PageUp / Key_PageDown   switch subtabs (Mods, Resource Packs)
+// SDL turns SIGTERM into a quit event, so this also quits the app on SIGTERM.
 // Built without SDL2 (no controller library), it only reports no controller.
 class Gamepad : public QObject
 {
@@ -32,6 +34,7 @@ private:
     void send(int key, bool press);
     void hold(int key);  // direction now held (0: none)
     void updateConnected();
+    void trigger(bool &down, int value, int key);
 
     QTimer m_timer;
     bool m_connected = false;
@@ -41,4 +44,6 @@ private:
     qint64 m_nextRepeat = 0;
     int m_stickKey = 0;
     int m_dpadKey = 0;
+    bool m_l2Down = false;
+    bool m_r2Down = false;
 };

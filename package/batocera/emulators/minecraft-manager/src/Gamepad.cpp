@@ -11,6 +11,8 @@
 
 namespace {
 constexpr int kStickDeadZone = 16000;   // of 32767
+constexpr int kTriggerPress = 16000;    // L2/R2 (0..32767): pressed above this,
+constexpr int kTriggerRelease = 8000;   // released below this
 constexpr int kFirstRepeatMs = 380;
 constexpr int kRepeatMs = 90;
 }
@@ -28,6 +30,8 @@ Gamepad::Gamepad(QObject *parent)
     for (int i = 0; i < SDL_NumJoysticks(); ++i) {
         if (SDL_IsGameController(i))
             SDL_GameControllerOpen(i);
+        else  // Batocera's SDL has no built-in mappings: they come in SDL_GAMECONTROLLERCONFIG
+            qWarning("Controller without a mapping, ignored: %s", SDL_JoystickNameForIndex(i));
     }
     updateConnected();
     connect(&m_timer, &QTimer::timeout, this, &Gamepad::poll);
@@ -70,6 +74,18 @@ void Gamepad::hold(int key)
     }
 }
 
+// Triggers are axes: one key press when pulled past halfway, no repeat
+void Gamepad::trigger(bool &down, int value, int key)
+{
+    if (!down && value > kTriggerPress) {
+        down = true;
+        send(key, true);
+    } else if (down && value < kTriggerRelease) {
+        down = false;
+        send(key, false);
+    }
+}
+
 void Gamepad::updateConnected()
 {
 #ifdef HAVE_SDL2
@@ -89,6 +105,9 @@ void Gamepad::poll()
     SDL_Event e;
     while (SDL_PollEvent(&e)) {
         switch (e.type) {
+        case SDL_QUIT:  // SDL catches SIGTERM and SIGINT (batocera-minecraft stop) and sends this
+            QCoreApplication::quit();
+            break;
         case SDL_CONTROLLERDEVICEADDED:
             SDL_GameControllerOpen(e.cdevice.which);
             updateConnected();
@@ -128,6 +147,14 @@ void Gamepad::poll()
             break;
         }
         case SDL_CONTROLLERAXISMOTION: {
+            if (e.caxis.axis == SDL_CONTROLLER_AXIS_TRIGGERLEFT) {
+                trigger(m_l2Down, e.caxis.value, Qt::Key_PageUp);
+                break;
+            }
+            if (e.caxis.axis == SDL_CONTROLLER_AXIS_TRIGGERRIGHT) {
+                trigger(m_r2Down, e.caxis.value, Qt::Key_PageDown);
+                break;
+            }
             if (e.caxis.axis != SDL_CONTROLLER_AXIS_LEFTX && e.caxis.axis != SDL_CONTROLLER_AXIS_LEFTY)
                 break;
             SDL_GameController *pad = SDL_GameControllerFromInstanceID(e.caxis.which);

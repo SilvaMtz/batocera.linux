@@ -430,7 +430,15 @@ def manage() -> int:
     if not MANAGER.exists():
         log(f"{MANAGER} is missing; opening Prism Launcher instead")
         return prism()
-    return subprocess.run([str(MANAGER)]).returncode
+    # The controller mappings from EmulationStation (see the generator):
+    # without them SDL opens no controller
+    env = dict(os.environ)
+    mappings = env.pop("MINECRAFT_SDL_GAMECONTROLLERCONFIG", "")
+    if mappings:
+        env["SDL_GAMECONTROLLERCONFIG"] = mappings
+    else:
+        log("no controller mappings from EmulationStation; Manage Minecraft may not see the controller")
+    return subprocess.run([str(MANAGER)], env=env).returncode
 
 
 def stop() -> int:

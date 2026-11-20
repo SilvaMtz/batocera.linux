@@ -26,8 +26,28 @@ Window {
     ]
     property int page: Math.max(0, ["installed", "browse", "updates"].indexOf(startPage))
 
+    // Subtabs of Installed and Browse Modrinth (L2/R2). One choice for both
+    // tabs: Resource Packs on Installed opens Browse on resource packs too.
+    // key: Modrinth's project type. tip and status: how to use one in the game.
+    readonly property var kinds: [
+        { key: "mod", label: "Mods", one: "mod", many: "mods", tip: "", status: "" },
+        { key: "resourcepack", label: "Resource Packs", one: "resource pack", many: "resource packs",
+          tip: "To use a resource pack, turn it on in Minecraft: Options, Resource Packs. Each player picks their own.",
+          status: "Turn them on in Minecraft: Options, Resource Packs" },
+        { key: "shader", label: "Shaders", one: "shader", many: "shaders",
+          tip: "To use a shader, pick it in Minecraft: Options, Video Settings, Shader Packs. Each player picks their own.",
+          status: "Pick one in Minecraft: Options, Video Settings, Shader Packs" }
+    ]
+    function kindOf(type) { return kinds.find((k) => k.key === type) || kinds[0] }
+    readonly property var kindLabels: kinds.map((k) => k.label)
+    property int kind: 0
+    readonly property string kindKey: kinds[kind].key
+
     property string gameInfo: ""
-    property var installed: []
+    property string gameVersion: ""
+    property var installed: []        // mods and resource packs
+    readonly property var installedShown: installed.filter((m) => m.type === kindKey)
+    property bool installedLoaded: false
     property var installedIds: ({})
     property var updates: []
     property var updateById: ({})
@@ -63,6 +83,7 @@ Window {
                     ids[m.id] = m
             installedIds = ids
             installed = r.mods
+            installedLoaded = true
             browse.markInstalled()
         })
     }
@@ -96,8 +117,12 @@ Window {
 
     function summary(command, r) {
         const lines = []
+        const tips = []
         if (command === "install" || command === "update") {
             for (const m of (r.installed || r.updated || [])) {
+                const tip = kindOf(m.type).tip
+                if (command === "install" && tip && !tips.includes(tip))
+                    tips.push(tip)
                 if (m.required_by)
                     lines.push("Also installed " + m.name + " " + m.version + ", needed by " + m.required_by)
                 else if (command === "install")
@@ -115,6 +140,8 @@ Window {
             lines.push("Nothing needed changing.")
         lines.push("")
         lines.push("Player 1 and Player 2 both get this the next time Minecraft starts.")
+        for (const tip of tips)
+            lines.push(tip)
         return lines.join("\n")
     }
 
@@ -138,6 +165,8 @@ Window {
         const notes = ["Version " + m.version]
         if (!m.in_sync)
             notes.push("Player 1 and Player 2 have different copies of it.")
+        if (kindOf(m.type).tip)
+            notes.push("", kindOf(m.type).tip)
         dialog.open(m.name, notes.join("\n"), buttons)
     }
 
@@ -165,10 +194,23 @@ Window {
     }
     readonly property var pages: [installedPage, browse, updatesPage]
 
+    // Mods / Resource Packs, on the tabs that have them
+    function setKind(index) {
+        index = (index + kinds.length) % kinds.length  // L2/R2 wrap around, like LB/RB
+        if (page > 1 || index === kind)
+            return
+        kind = index
+        browse.reset()
+        installedList.currentIndex = 0
+        pages[page].takeFocus()
+    }
+
     Component.onCompleted: {
         call(["info"], (r) => {
-            if (!r.error)
-                gameInfo = "Minecraft " + r.minecraft + " with " + r.loader.charAt(0).toUpperCase() + r.loader.slice(1)
+            if (!r.error) {
+                gameVersion = "Minecraft " + r.minecraft
+                gameInfo = gameVersion + " with " + r.loader.charAt(0).toUpperCase() + r.loader.slice(1)
+            }
         })
         refreshInstalled()
         refreshUpdates()
@@ -186,6 +228,10 @@ Window {
                 setPage((page + 1) % tabs.length)
             } else if (event.key === Qt.Key_Backtab) {
                 setPage((page + tabs.length - 1) % tabs.length)
+            } else if (event.key === Qt.Key_PageUp) {
+                setKind(kind - 1)
+            } else if (event.key === Qt.Key_PageDown) {
+                setKind(kind + 1)
             } else if (event.key === Qt.Key_Search || event.text === "/") {
                 setPage(1)
                 browse.openKeyboard()
@@ -215,7 +261,7 @@ Window {
             Text {
                 anchors.top: title.bottom
                 anchors.topMargin: Theme.px(4)
-                text: (gameInfo ? gameInfo + "  ·  " : "") + "Mods are installed for Player 1 and Player 2"
+                text: (gameInfo ? gameInfo + "  ·  " : "") + "Everything is installed for Player 1 and Player 2"
                 color: Theme.dim
                 font.pixelSize: Theme.px(26)
             }
@@ -267,11 +313,28 @@ Window {
 
                 function takeFocus() { installedList.forceActiveFocus() }
 
+                SubTabs {
+                    id: installedKinds
+                    labels: win.kindLabels
+                    current: win.kind
+                    onPicked: (index) => win.setKind(index)
+                }
                 Text {
                     id: installedStatus
+                    anchors.top: installedKinds.bottom
+                    anchors.topMargin: Theme.px(22)
+                    width: parent.width
+                    elide: Text.ElideRight
                     text: {
-                        const system = win.installed.filter((m) => m.system).length
-                        return win.installed.length + " mods  ·  " + system + " come with the system"
+                        const shown = win.installedShown
+                        if (!win.installedLoaded)
+                            return ""
+                        const k = win.kinds[win.kind]
+                        if (k.key === "mod") {
+                            const system = shown.filter((m) => m.system).length
+                            return shown.length + " mods  ·  " + system + " come with the system"
+                        }
+                        return shown.length + " " + (shown.length === 1 ? k.one : k.many) + "  ·  " + k.status
                     }
                     color: Theme.dim
                     font.pixelSize: Theme.px(26)
@@ -282,8 +345,9 @@ Window {
                     anchors.topMargin: Theme.px(20)
                     anchors.bottom: parent.bottom
                     width: parent.width
-                    model: win.installed
-                    emptyText: "Reading the installed mods…"
+                    model: win.installedShown
+                    emptyText: !win.installedLoaded ? "Reading what's installed…"
+                             : "No " + win.kinds[win.kind].many + " installed yet.\nFind some in Browse Modrinth (RB)."
                     delegate: ModRow {
                         required property var modelData
                         required property int index
@@ -300,8 +364,12 @@ Window {
                                 b.push({ text: "Update " + up.new_version, color: Theme.warn })
                             if (modelData.system)
                                 b.push({ text: "System", color: Theme.info })
-                            if (!modelData.managed && !modelData.system)
+                            if (!modelData.managed && !modelData.system) {
+                                const only = Object.keys(modelData.instances)
+                                if (only.length === 1)
+                                    b.push({ text: only[0] === "P1" ? "Player 1 only" : "Player 2 only", color: Theme.warn })
                                 b.push({ text: "Added by hand", color: Theme.dim })
+                            }
                             else if (modelData.managed && !modelData.in_sync)
                                 b.push({ text: "Not the same in P1 and P2", color: Theme.danger })
                             return b
@@ -312,7 +380,7 @@ Window {
                             win.openInstalled(modelData)
                         }
                     }
-                    onActivated: (index) => win.openInstalled(win.installed[index])
+                    onActivated: (index) => win.openInstalled(win.installedShown[index])
                 }
             }
 
@@ -346,6 +414,17 @@ Window {
                         top.forceActiveFocus()
                 }
 
+                // The subtab changed: the next visit searches the other kind
+                // (same words and sort); a search under way is ignored
+                function reset() {
+                    searchSeq++
+                    hits = []
+                    total = 0
+                    error = ""
+                    loading = false
+                    loaded = false
+                }
+
                 function search(reset) {
                     if (reset) {
                         pageNo = 0
@@ -358,7 +437,8 @@ Window {
                     const seq = searchSeq
                     loading = true
                     error = ""
-                    win.call(["search", query, "--sort", sorts[sortIndex][0], "--page", String(pageNo)], (r) => {
+                    win.call(["search", query, "--type", win.kindKey, "--sort", sorts[sortIndex][0],
+                              "--page", String(pageNo)], (r) => {
                         if (seq !== searchSeq)
                             return  // an older search
                         loading = false
@@ -400,8 +480,17 @@ Window {
                     }
                 }
 
+                SubTabs {
+                    id: browseKinds
+                    labels: win.kindLabels
+                    current: win.kind
+                    onPicked: (index) => win.setKind(index)
+                }
+
                 Item {
                     id: top
+                    anchors.top: browseKinds.bottom
+                    anchors.topMargin: Theme.px(22)
                     width: parent.width
                     height: Theme.px(84)
                     focus: true
@@ -433,7 +522,7 @@ Window {
                             anchors.verticalCenter: parent.verticalCenter
                             x: Theme.px(28)
                             width: parent.width - Theme.px(56)
-                            text: browse.query || "Search Modrinth mods…"
+                            text: browse.query || "Search Modrinth " + win.kinds[win.kind].many + "…"
                             color: browse.query ? Theme.text : Theme.dim
                             font.pixelSize: Theme.px(30)
                             elide: Text.ElideRight
@@ -482,7 +571,12 @@ Window {
                     elide: Text.ElideRight
                     text: browse.error ? browse.error
                         : browse.loading && !browse.hits.length ? "Searching Modrinth…"
-                        : Theme.count(browse.total) + " mods" + (gameInfo ? " for " + gameInfo : "")
+                        : !browse.loaded ? ""
+                        : Theme.count(browse.total) + " " + win.kinds[win.kind].many
+                          + (!gameVersion ? ""
+                             : win.kindKey === "mod" ? " for " + gameInfo
+                             : win.kindKey === "shader" ? " for " + gameVersion + " with Iris"
+                             : " for " + gameVersion)
                     color: browse.error ? Theme.danger : Theme.dim
                     font.pixelSize: Theme.px(26)
                 }
@@ -494,7 +588,7 @@ Window {
                     anchors.bottom: parent.bottom
                     width: parent.width
                     model: browse.hits
-                    emptyText: browse.loading || browse.error ? "" : (browse.loaded ? "No mods found" : "")
+                    emptyText: browse.loading || browse.error ? "" : (browse.loaded ? "No " + win.kinds[win.kind].many + " found" : "")
                     delegate: ModRow {
                         required property var modelData
                         required property int index
@@ -552,7 +646,7 @@ Window {
                     }
                     function activate() {
                         if (win.updates.length)
-                            win.change(["update"], "Updating " + win.updates.length + " mods…")
+                            win.change(["update"], "Updating " + win.updates.length + " of them…")
                         else {
                             win.updatesChecked = false
                             win.refreshUpdates()

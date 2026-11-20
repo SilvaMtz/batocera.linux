@@ -10,13 +10,15 @@ windows. Design doc: https://claude.ai/artifact/B9PkUHMB61vRypjDCRRFQw
 |---|---|
 | Prism AppImage 11.1.1 (pinned, sha256 in `prismlauncher.hash`) | this package, installed to `/usr/share/prismlauncher/` |
 | Launcher script | `batocera-minecraft`, installed to `/usr/bin/` |
-| Mod script (Modrinth; installs into P1 and P2) | `batocera-minecraft-mods`, installed to `/usr/bin/` |
+| Mod script (Modrinth mods, resource packs and shaders; installs into P1 and P2) | `batocera-minecraft-mods`, installed to `/usr/bin/` |
 | Manage Minecraft, the mod manager app (Qt 6, QML screens) | `../minecraft-manager/`, its own package, selected by this one |
+| Qt's WebP plugin, for Modrinth's icons (Batocera's Buildroot has no `qt6imageformats`) | `package/batocera/libraries/qt6imageformats/`, selected by Manage Minecraft |
 | Instance templates P1/P2, Prism defaults | `minecraft/`, installed to `/usr/share/prismlauncher/minecraft/` |
 | Auto-LAN mod (source, build script; jar in P1's template) | `autolan/` |
 | System art (logos, carousel block, background) for es-theme-carbon, and its generator | `theme/`, installed to `/usr/share/emulationstation/themes/es-theme-carbon/art/` |
 | Your own logo, wallpaper and entry pictures (not in Git) | `artwork/`, applied by `apply-artwork.py` |
 | configgen generator | `package/batocera/core/batocera-configgen/configgen/configgen/generators/prismlauncher/` |
+| configgen defaults: no HUD or bezel (`hud_support: false`, as for Kodi and Flatpak) | `minecraft` in `batocera-configgen/configs/configgen-defaults.yml` |
 | System entry | `minecraft` in `batocera-es-system/es_systems.yml` |
 | Menu entries and their default images | `roms/`, installed to `/usr/share/batocera/datainit/roms/minecraft/` (copied to `/userdata/roms/minecraft/` on first boot only). Kept in this package rather than `batocera-es-system/roms/` so the pictures can be applied in one place: the two packages install in no fixed order. |
 | Openbox rule and borderless theme | `board/batocera/fsoverlay/etc/openbox/rc.xml`, `board/batocera/fsoverlay/usr/share/themes/BatoceraNoBorder/` |
@@ -44,32 +46,47 @@ this package:
 
 `batocera-minecraft stop` is the hotkey exit; it also closes Manage Minecraft.
 
+Batocera's SDL has no built-in controller mappings; programs get
+EmulationStation's from configgen. The generator passes them as
+`MINECRAFT_SDL_GAMECONTROLLERCONFIG`, and the script hands them to Manage
+Minecraft alone as `SDL_GAMECONTROLLERCONFIG`, so the games' own controller
+handling (Controlify) is left as it is.
+
 For Single Player and Split Screen, Prism runs with `QT_QPA_PLATFORM=offscreen`:
 it works but draws no window, so nothing flashes before the game. If a game
 does not appear within 4 minutes (Prism stuck on a hidden dialog, such as an
 expired sign-in), the script closes it and opens Prism visibly instead. The
 Prism Launcher entry always shows Prism.
 
-## Manage Minecraft (mods)
+## Manage Minecraft (mods, resource packs and shaders)
 
-Mods come from Modrinth only, for the instances' Minecraft version and
-loader (26.3, Fabric), and always go into both P1 and P2: Split Screen needs
-the same mods on both sides. They are stored as Prism stores them (jar plus
-`mods/.index/<slug>.pw.toml`), so Prism lists and updates them too.
+Mods, resource packs and shaders come from Modrinth only, for the instances'
+Minecraft version (26.3) and, for mods, their loader (Fabric); shaders are
+the ones for Iris, a system mod. They always go into both P1 and P2: Split
+Screen needs the same mods on both sides. They are stored as Prism stores them
+(the file plus `mods/.index/<slug>.pw.toml`, or the same in `resourcepacks/`
+and `shaderpacks/`), so Prism lists and updates them too. Resource packs and
+shaders are only installed; each player turns them on in Minecraft (Options,
+Resource Packs; Options, Video Settings, Shader Packs).
 
 - `batocera-minecraft-mods` does the work and can be used over SSH:
-  `info`, `list [--icons]`, `search [TEXT] [--sort ...] [--page N]`,
-  `install PROJECT...` (adds required mods, refuses incompatible ones),
-  `remove PROJECT...`, `updates`, `update [PROJECT...]`, `sync` (copies a mod
-  found in only one instance to the other). `--json` for programs,
-  `--data DIR` / `--template DIR` for test copies. The system's own mods (the
-  template's) can't be removed or updated here, nor can a mod another one
-  requires be removed. Removing a mod leaves the mods it required.
+  `info`, `list [--icons] [--type mod|resourcepack|shader|all]`,
+  `search [TEXT] [--type mod|resourcepack|shader] [--sort ...] [--page N]`,
+  `install PROJECT...` (a mod, resource pack or shader, by its Modrinth type;
+  adds required mods, refuses incompatible ones), `remove PROJECT...`,
+  `updates`, `update [PROJECT...]` (all kinds), `sync` (copies what is found in only one
+  instance to the other). `--json` for programs, `--data DIR` /
+  `--template DIR` for test copies. The system's own mods (the template's)
+  can't be removed or updated here, nor can a mod something else requires be
+  removed. Removing a mod leaves the mods it required. Files added by hand
+  (no metadata) are listed but not touched.
 - `../minecraft-manager/` is the app on the TV: Installed, Browse Modrinth
-  (most downloaded, or search with an on-screen keyboard) and Updates tabs,
-  driven by a controller (A select, B back/exit, LB/RB tabs, Y search) or
-  keyboard and mouse. A small C++ program runs the mod script and turns
-  controller input into key presses; the screens are QML files read at start
+  (most downloaded, or search with an on-screen keyboard) and Updates tabs;
+  Installed and Browse Modrinth each have Mods, Resource Packs and Shaders
+  subtabs, one choice shared by both tabs (L2/R2 wrap around, like LB/RB). Driven by a controller (A select, B back/exit,
+  LB/RB tabs, L2/R2 subtabs, Y search) or keyboard and mouse (Tab, PgUp/PgDn). A small C++ program runs the mod script and turns
+  controller input into key presses (SDL; it logs controllers that have no
+  mapping, and quits on SIGTERM, which SDL turns into a quit event); the screens are QML files read at start
   (`/usr/share/minecraft-manager/qml`), so `dev-deploy.sh` updates them
   without compiling. On a Mac with Homebrew's `qt`, `cmake`, `ninja`, `sdl2`:
 
@@ -134,6 +151,13 @@ commit it with the source.
   on port 25565.
 - No GPU errors with the riser's slot set to **PCIe x16 Link Speed = Gen4** in
   the BIOS. Gen5 over the riser caused GPU hangs (Xid 31/119).
+
+On the built image (2026-11-20), launched from EmulationStation with a
+DualSense: Manage Minecraft took D-pad and RB, filled the screen with no
+bezel, and PS+Start closed it in half a second. R2 and L2 switched between
+the subtabs on Installed and Browse Modrinth, and
+Modrinth's WebP icons showed with the `qt6imageformats` plugin. Single Player reached the
+title screen full screen in 26 seconds.
 
 ## Artwork
 
@@ -206,6 +230,5 @@ Logs: `/userdata/system/logs/minecraft.log`, `es_launch_stdout.log` /
 - Controllers: Controlify binds a profile to `md5(vendor id + product id + serial)`;
   P2 falls back to the first controller if its own is missing. Set up by hand for now.
 - Minecraft Launcher entry and the account pickers.
-- Manage Minecraft: resource packs, shaders and modpacks; removing the mods
-  another mod pulled in.
-- Not yet checked in a built image: the first build (scripts/minecraft-fork/build-on-mac.sh) is running.
+- Manage Minecraft: modpacks; removing the mods another mod pulled in, and
+  files added by hand.

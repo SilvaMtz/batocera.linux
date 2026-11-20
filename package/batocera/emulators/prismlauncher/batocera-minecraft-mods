@@ -1,26 +1,34 @@
 #!/usr/bin/env python3
-"""Manage the Minecraft system's mods from Modrinth (Manage Minecraft, or SSH).
+"""Manage the Minecraft system's mods, resource packs and shaders from
+Modrinth (Manage Minecraft, or SSH).
 
-Every mod goes into both instances, P1 and P2: Split Screen needs the same
-mods on both sides. Mods are stored the way Prism Launcher stores them (the
-jar in minecraft/mods/ plus minecraft/mods/.index/<slug>.pw.toml), so Prism
-lists them and can update them as well. Only Modrinth is used, and only
-versions for the instances' Minecraft version and mod loader.
+Everything goes into both instances, P1 and P2: Split Screen needs the same
+mods on both sides. Files are stored the way Prism Launcher stores them (the
+jar in minecraft/mods/ plus minecraft/mods/.index/<slug>.pw.toml; resource
+packs and shaders the same way in minecraft/resourcepacks/ and
+minecraft/shaderpacks/), so Prism lists them and can update them as well.
+Only Modrinth is used, and only versions for the instances' Minecraft version
+and, for mods, their mod loader; shaders are the ones for Iris (a system mod).
+Resource packs and shaders are only installed: each player turns them on in
+Minecraft (Options, Resource Packs; Video Settings, Shader Packs).
 
 Usage: batocera-minecraft-mods [--json] [--data DIR] [--template DIR] COMMAND
   info                    game version, loader and the instances
-  list [--icons]          installed mods (--icons: with Modrinth icon URLs)
-  search [TEXT] [--sort relevance|downloads|follows|newest|updated] [--page N]
-  install PROJECT...      mods and the mods they require (Modrinth slug or id)
-  remove PROJECT...       mods (not system mods, nor ones another mod requires)
-  updates                 installed mods with a newer version
-  update [PROJECT...]     update these mods, or all that have an update
-  sync                    copy mods found in only one instance to the other
+  list [--icons] [--type mod|resourcepack|shader|all]
+                          what is installed (--icons: with Modrinth icon URLs)
+  search [TEXT] [--type mod|resourcepack|shader]
+         [--sort relevance|downloads|follows|newest|updated] [--page N]
+  install PROJECT...      mods, resource packs or shaders (Modrinth slug or id),
+                          and the mods they require
+  remove PROJECT...       (not system mods, nor ones something else requires)
+  updates                 installed projects with a newer version
+  update [PROJECT...]     update these, or all that have an update
+  sync                    copy what is found in only one instance to the other
 
 --json prints one JSON document (for the Manage Minecraft app); errors are
 {"error": "..."} with exit code 1. System mods (the ones in the image's
 instance templates) can't be removed or updated here: image updates handle
-them. Jars without Prism metadata (our batocera-autolan.jar, or one copied by
+them. Files without Prism metadata (our batocera-autolan.jar, or one copied by
 hand) are listed but never touched.
 """
 from __future__ import annotations
@@ -49,6 +57,16 @@ LOADERS = {  # mmc-pack.json component -> Modrinth loader
     "org.quiltmc.quilt-loader": "quilt",
     "net.neoforged": "neoforge",
     "net.minecraftforge": "forge",
+}
+# What can be installed, by Modrinth project type: the instance folder, the
+# files in it that count when they have no metadata (added by hand), and
+# Modrinth's loader for its versions (None: the instances' mod loader)
+KINDS = {
+    "mod": {"folder": "mods", "files": "*.jar", "one": "mod", "many": "mods", "loader": None},
+    "resourcepack": {"folder": "resourcepacks", "files": "*.zip", "one": "resource pack",
+                     "many": "resource packs", "loader": "minecraft"},
+    "shader": {"folder": "shaderpacks", "files": "*.zip", "one": "shader", "many": "shaders",
+               "loader": "iris"},  # Iris is one of the system mods
 }
 
 
@@ -109,24 +127,30 @@ class Game:
             raise Failure("P1 and P2 use different Minecraft versions or loaders: "
                           + ", ".join(f"{i} {v} {l}" for i, (v, l) in packs.items()))
 
-    def compatible_version(self, project_id: str, title: str) -> dict:
+    def loaders(self, kind: str) -> list[str]:
+        """Modrinth's loader for this kind (resource packs: "minecraft")."""
+        return [KINDS[kind]["loader"] or self.loader]
+
+    def compatible_version(self, project_id: str, title: str, kind: str) -> dict:
         versions = api(f"/project/{project_id}/version",
-                       {"loaders": [self.loader], "game_versions": [self.version]}) or []
+                       {"loaders": self.loaders(kind), "game_versions": [self.version]}) or []
         if not versions:
-            raise Failure(f"{title} has no version for Minecraft {self.version} with {self.loader.title()}")
+            loader = self.loaders(kind)[0]
+            needs = f" with {loader.title()}" if loader != "minecraft" else ""
+            raise Failure(f"{title} has no version for Minecraft {self.version}{needs}")
         return next((v for v in versions if v["version_type"] == "release"), versions[0])
 
 
-# ------------------------------------------------------------- installed mods
+# ---------------------------------------------------------- installed content
 
-def mods_dir(data: Path, inst: str) -> Path:
-    return data / "instances" / inst / "minecraft" / "mods"
+def content_dir(data: Path, inst: str, kind: str) -> Path:
+    return data / "instances" / inst / "minecraft" / KINDS[kind]["folder"]
 
 
-def system_slugs(template: Path) -> set[str]:
+def system_slugs(template: Path, kind: str) -> set[str]:
     return {p.name.removesuffix(".pw.toml")
             for inst in INSTANCES
-            for p in (mods_dir(template, inst) / ".index").glob("*.pw.toml")}
+            for p in (content_dir(template, inst, kind) / ".index").glob("*.pw.toml")}
 
 
 def jar_state(folder: Path, filename: str) -> str | None:
@@ -154,39 +178,43 @@ def jar_info(jar: Path) -> tuple[str | None, str | None]:
 
 
 def installed(data: Path, template: Path) -> dict[str, dict]:
-    """Mods with Prism metadata, keyed by Modrinth project id ("file:<slug>"
-    for metadata without one), plus "unmanaged" jars under key "jar:<name>"."""
-    system = system_slugs(template)
+    """Mods, resource packs and shaders with Prism metadata, keyed by Modrinth project
+    id ("file:<type>:<slug>" for metadata without one), plus "unmanaged" files
+    (no metadata) under "file:<type>:<name>". "type" is the Modrinth project type."""
     mods: dict[str, dict] = {}
-    for inst in INSTANCES:
-        folder = mods_dir(data, inst)
-        known = set()
-        for meta_path in sorted((folder / ".index").glob("*.pw.toml")):
-            meta = tomllib.loads(meta_path.read_text())
-            slug = meta_path.name.removesuffix(".pw.toml")
-            modrinth = meta.get("update", {}).get("modrinth", {})
-            key = modrinth.get("mod-id") or f"file:{slug}"
-            known.update({meta["filename"], meta["filename"] + ".disabled"})
-            mod = mods.setdefault(key, {
-                "id": modrinth.get("mod-id"), "slug": slug, "name": meta.get("name", slug),
-                "version": meta.get("x-prismlauncher-version-number"),
-                "version_id": modrinth.get("version"), "filename": meta["filename"],
-                "sha512": meta.get("download", {}).get("hash"),
-                "system": slug in system, "managed": True, "instances": {}})
-            mod["instances"][inst] = {
-                "slug": slug, "filename": meta["filename"], "version_id": modrinth.get("version"),
-                "state": jar_state(folder, meta["filename"]) or "missing"}
-        for jar in sorted(folder.glob("*.jar")) + sorted(folder.glob("*.jar.disabled")):
-            if jar.name in known:
-                continue
-            name = jar.name.removesuffix(".disabled")
-            shipped = any((mods_dir(template, i) / name).exists() for i in INSTANCES)  # our autolan mod
-            title, version = jar_info(jar)
-            mod = mods.setdefault(f"jar:{name}", {
-                "id": None, "slug": None, "name": title or name, "version": version, "version_id": None,
-                "filename": name, "sha512": None, "system": shipped, "managed": False, "instances": {}})
-            mod["instances"][inst] = {"filename": name,
-                                      "state": "disabled" if jar.name.endswith(".disabled") else "enabled"}
+    for kind, spec in KINDS.items():
+        system = system_slugs(template, kind)
+        for inst in INSTANCES:
+            folder = content_dir(data, inst, kind)
+            known = set()
+            for meta_path in sorted((folder / ".index").glob("*.pw.toml")):
+                meta = tomllib.loads(meta_path.read_text())
+                slug = meta_path.name.removesuffix(".pw.toml")
+                modrinth = meta.get("update", {}).get("modrinth", {})
+                key = modrinth.get("mod-id") or f"file:{kind}:{slug}"
+                known.update({meta["filename"], meta["filename"] + ".disabled"})
+                mod = mods.setdefault(key, {
+                    "id": modrinth.get("mod-id"), "type": kind, "slug": slug, "name": meta.get("name", slug),
+                    "version": meta.get("x-prismlauncher-version-number"),
+                    "version_id": modrinth.get("version"), "filename": meta["filename"],
+                    "sha512": meta.get("download", {}).get("hash"),
+                    "system": slug in system, "managed": True, "instances": {}})
+                mod["instances"][inst] = {
+                    "slug": slug, "filename": meta["filename"], "version_id": modrinth.get("version"),
+                    "state": jar_state(folder, meta["filename"]) or "missing"}
+            pattern = spec["files"]
+            for file in sorted(folder.glob(pattern)) + sorted(folder.glob(pattern + ".disabled")):
+                if file.name in known:
+                    continue
+                name = file.name.removesuffix(".disabled")
+                shipped = any((content_dir(template, i, kind) / name).exists() for i in INSTANCES)  # autolan
+                title, version = jar_info(file) if kind == "mod" else (name.removesuffix(".zip"), None)
+                mod = mods.setdefault(f"file:{kind}:{name}", {
+                    "id": None, "type": kind, "slug": None, "name": title or name, "version": version,
+                    "version_id": None, "filename": name, "sha512": None, "system": shipped,
+                    "managed": False, "instances": {}})
+                mod["instances"][inst] = {"filename": name,
+                                          "state": "disabled" if file.name.endswith(".disabled") else "enabled"}
     for mod in mods.values():
         versions = {i.get("version_id") for i in mod["instances"].values()}
         mod["in_sync"] = len(mod["instances"]) == len(INSTANCES) and len(versions) == 1
@@ -246,11 +274,11 @@ def primary_file(version: dict) -> dict:
 
 
 def write_mod(data: Path, mods: dict, project: dict, version: dict, jar: bytes) -> None:
-    """Put a mod (new or a new version) into both instances."""
+    """Put a mod, resource pack or shader (new or a new version) into both instances."""
     file = primary_file(version)
     old = mods.get(project["id"])
     for inst in INSTANCES:
-        folder = mods_dir(data, inst)
+        folder = content_dir(data, inst, project["project_type"])
         (folder / ".index").mkdir(parents=True, exist_ok=True)
         prev = old["instances"].get(inst) if old else None
         disabled = bool(prev and prev.get("state") == "disabled")
@@ -269,7 +297,7 @@ def write_mod(data: Path, mods: dict, project: dict, version: dict, jar: bytes) 
 
 def delete_mod(data: Path, mod: dict) -> None:
     for inst, where in mod["instances"].items():
-        folder = mods_dir(data, inst)
+        folder = content_dir(data, inst, mod["type"])
         for name in (where["filename"], where["filename"] + ".disabled"):
             (folder / name).unlink(missing_ok=True)
         (folder / ".index" / f"{where['slug']}.pw.toml").unlink(missing_ok=True)
@@ -292,7 +320,8 @@ def cmd_info(ctx) -> dict:
 
 
 def cmd_list(ctx) -> dict:
-    mods = installed(ctx.data, ctx.template)
+    mods = {k: m for k, m in installed(ctx.data, ctx.template).items()
+            if ctx.args.type in ("all", m["type"])}
     if ctx.args.icons:  # one request; the list still works offline
         ids = sorted(m["id"] for m in mods.values() if m["id"])
         try:
@@ -301,25 +330,30 @@ def cmd_list(ctx) -> dict:
             icons = {}
         for mod in mods.values():
             mod["icon_url"] = icons.get(mod["id"]) or None
-    order = sorted(mods.values(), key=lambda m: (not m["managed"], m["name"].lower()))
+    order = sorted(mods.values(), key=lambda m: (m["type"] != "mod", not m["managed"], m["name"].lower()))
     return {"mods": [{k: v for k, v in m.items() if k != "sha512"} for m in order]}
 
 
 def cmd_search(ctx) -> dict:
     game = Game(ctx.data)
-    facets = [["project_type:mod"], [f"categories:{game.loader}"], [f"versions:{game.version}"],
-              ["client_side:required", "client_side:optional"]]
+    kind = ctx.args.type
+    facets = [[f"project_type:{kind}"], [f"versions:{game.version}"]]
+    loader = game.loaders(kind)[0]
+    if loader != "minecraft":  # mods: the instances' loader; shaders: Iris
+        facets.append([f"categories:{loader}"])
+    if kind == "mod":
+        facets.append(["client_side:required", "client_side:optional"])
     result = api("/search", {"query": ctx.args.text or "", "facets": facets,
                              "index": ctx.args.sort, "offset": ctx.args.page * PAGE_SIZE,
                              "limit": PAGE_SIZE})
     mods = installed(ctx.data, ctx.template)
     hits = [{
-        "id": h["project_id"], "slug": h["slug"], "name": h["title"],
+        "id": h["project_id"], "type": kind, "slug": h["slug"], "name": h["title"],
         "description": h["description"], "author": h["author"], "downloads": h["downloads"],
         "icon_url": h.get("icon_url") or None, "categories": h.get("display_categories", []),
         "installed": h["project_id"] in mods,
     } for h in result["hits"]]
-    return {"query": ctx.args.text or "", "page": ctx.args.page, "page_size": PAGE_SIZE,
+    return {"type": kind, "query": ctx.args.text or "", "page": ctx.args.page, "page_size": PAGE_SIZE,
             "total": result["total_hits"], "hits": hits}
 
 
@@ -343,9 +377,10 @@ def plan_install(game: Game, mods: dict, refs: list[str], also_update: dict | No
         pid = project["id"]
         if pid in plan or pid in mods:
             continue  # planned already, or installed (cmd_install reports asked-for ones)
-        if project["project_type"] != "mod":
-            raise Failure(f"{project['title']} is a {project['project_type']}, not a mod")
-        version = game.compatible_version(pid, project["title"])
+        if project["project_type"] not in KINDS:
+            raise Failure(f"{project['title']} is a {project['project_type']}: "
+                          "only mods, resource packs and shaders can be installed here")
+        version = game.compatible_version(pid, project["title"], project["project_type"])
         plan[pid] = (project, version)
         reasons[pid] = needed_by
         for dep in version["dependencies"]:
@@ -376,8 +411,9 @@ def apply_plan(ctx, game: Game, mods: dict, plan, reasons) -> list[dict]:
     done = []
     for pid, (project, version) in plan.items():
         write_mod(ctx.data, mods, project, version, jars[pid])
-        done.append({"id": pid, "slug": project["slug"], "name": project["title"],
-                     "version": version["version_number"], "required_by": reasons.get(pid)})
+        done.append({"id": pid, "type": project["project_type"], "slug": project["slug"],
+                     "name": project["title"], "version": version["version_number"],
+                     "required_by": reasons.get(pid)})
     return done
 
 
@@ -399,7 +435,7 @@ def cmd_remove(ctx) -> dict:
     for ref in ctx.args.projects:
         hit = find(mods, ref)
         if not hit:
-            raise Failure(f"{ref} isn't installed (or isn't a Modrinth mod)")
+            raise Failure(f"{ref} isn't installed (or isn't from Modrinth)")
         key, mod = hit
         if mod["system"]:
             raise Failure(f"{mod['name']} comes with the system and can't be removed here")
@@ -418,23 +454,27 @@ def cmd_remove(ctx) -> dict:
 
 
 def find_updates(game: Game, mods: dict) -> dict[str, dict]:
-    """project id -> newer compatible version, for installed non-system mods."""
-    candidates = {m["sha512"]: k for k, m in mods.items()
-                  if m["managed"] and not m["system"] and m["id"] and m["sha512"]}
-    if not candidates:
-        return {}
-    latest = api("/version_files/update", body={
-        "hashes": list(candidates), "algorithm": "sha512",
-        "loaders": [game.loader], "game_versions": [game.version]}) or {}
-    return {candidates[h]: v for h, v in latest.items()
-            if h in candidates and v["id"] != mods[candidates[h]]["version_id"]}
+    """project id -> newer compatible version, for installed non-system
+    mods, resource packs and shaders (one request per kind: their loaders differ)."""
+    updates = {}
+    for kind in KINDS:
+        candidates = {m["sha512"]: k for k, m in mods.items()
+                      if m["type"] == kind and m["managed"] and not m["system"] and m["id"] and m["sha512"]}
+        if not candidates:
+            continue
+        latest = api("/version_files/update", body={
+            "hashes": list(candidates), "algorithm": "sha512",
+            "loaders": game.loaders(kind), "game_versions": [game.version]}) or {}
+        updates.update({candidates[h]: v for h, v in latest.items()
+                        if h in candidates and v["id"] != mods[candidates[h]]["version_id"]})
+    return updates
 
 
 def cmd_updates(ctx) -> dict:
     game = Game(ctx.data)
     mods = installed(ctx.data, ctx.template)
-    return {"updates": [{"id": pid, "name": mods[pid]["name"], "version": mods[pid]["version"],
-                         "new_version": v["version_number"]}
+    return {"updates": [{"id": pid, "type": mods[pid]["type"], "name": mods[pid]["name"],
+                         "version": mods[pid]["version"], "new_version": v["version_number"]}
                         for pid, v in find_updates(game, mods).items()]}
 
 
@@ -458,8 +498,9 @@ def cmd_update(ctx) -> dict:
 
 
 def cmd_sync(ctx) -> dict:
-    """Mods with metadata in only one instance (or different versions): give
-    both instances P1's version, or the one instance's that has it."""
+    """Mods, resource packs and shaders with metadata in only one instance (or
+    different versions): give both instances P1's version, or the one
+    instance's that has it."""
     mods = installed(ctx.data, ctx.template)
     copied = []
     for mod in mods.values():
@@ -467,14 +508,14 @@ def cmd_sync(ctx) -> dict:
             continue
         src_inst = INSTANCES[0] if INSTANCES[0] in mod["instances"] else next(iter(mod["instances"]))
         src = mod["instances"][src_inst]
-        src_dir = mods_dir(ctx.data, src_inst)
+        src_dir = content_dir(ctx.data, src_inst, mod["type"])
         jar_name = src["filename"] + (".disabled" if src["state"] == "disabled" else "")
         if src["state"] == "missing":
             continue  # nothing to copy; a launch downloads it from its metadata
         for inst in INSTANCES:
             if inst == src_inst:
                 continue
-            dst_dir = mods_dir(ctx.data, inst)
+            dst_dir = content_dir(ctx.data, inst, mod["type"])
             prev = mod["instances"].get(inst)
             if prev:
                 for name in (prev["filename"], prev["filename"] + ".disabled"):
@@ -497,13 +538,14 @@ def human(command: str, result: dict) -> str:
                      f"instances {', '.join(result['instances'])} in {result['data']}")
     elif command == "list":
         for m in result["mods"]:
-            notes = [n for n, on in (("system", m["system"]), ("no metadata, not managed", not m["managed"]),
+            notes = [n for n, on in ((KINDS[m["type"]]["one"], m["type"] != "mod"), ("system", m["system"]),
+                                     ("no metadata, not managed", not m["managed"]),
                                      ("NOT IN SYNC", m["managed"] and not m["in_sync"])) if on]
             notes += sorted({f"{i} {w['state']}" for i, w in m["instances"].items() if w["state"] != "enabled"})
             where = "+".join(m["instances"])
             lines.append(f"{m['name']:34} {m['version'] or '':28} {where:6} {', '.join(notes)}")
     elif command == "search":
-        lines.append(f"{result['total']} mods, page {result['page'] + 1}")
+        lines.append(f"{result['total']} {KINDS[result['type']]['many']}, page {result['page'] + 1}")
         for h in result["hits"]:
             mark = " [installed]" if h["installed"] else ""
             lines.append(f"{h['slug']:28} {h['name']}{mark}  ({h['downloads']:,} downloads)")
@@ -526,7 +568,7 @@ def human(command: str, result: dict) -> str:
     elif command == "sync":
         lines += [f"Copied {c['name']} from {c['from']} to {c['to']}" for c in result["copied"]]
         if not result["copied"]:
-            lines.append("P1 and P2 already have the same mods")
+            lines.append("P1 and P2 already have the same mods, resource packs and shaders")
     return "\n".join(lines)
 
 
@@ -544,10 +586,12 @@ def main() -> int:
     sub = parser.add_subparsers(dest="command", required=True)
     for name in ("info", "updates", "sync"):
         sub.add_parser(name, parents=[common])
-    sub.add_parser("list", parents=[common]).add_argument(
-        "--icons", action="store_true", help="add each mod's Modrinth icon URL (one request)")
+    s = sub.add_parser("list", parents=[common])
+    s.add_argument("--icons", action="store_true", help="add each one's Modrinth icon URL (one request)")
+    s.add_argument("--type", default="all", choices=["all", *KINDS])
     s = sub.add_parser("search", parents=[common])
     s.add_argument("text", nargs="?")
+    s.add_argument("--type", default="mod", choices=list(KINDS))
     s.add_argument("--sort", default="relevance",
                    choices=["relevance", "downloads", "follows", "newest", "updated"])
     s.add_argument("--page", type=int, default=0)

@@ -4,6 +4,7 @@ config BR2_PACKAGE_MINECRAFT_MANAGER
     select BR2_PACKAGE_QT6BASE_GUI
     select BR2_PACKAGE_QT6DECLARATIVE
     select BR2_PACKAGE_QT6DECLARATIVE_QUICK
+    select BR2_PACKAGE_QT6IMAGEFORMATS  # Modrinth's icons are mostly WebP
     select BR2_PACKAGE_SDL2
     help
       Manage Minecraft, the Minecraft system's mod manager: browse

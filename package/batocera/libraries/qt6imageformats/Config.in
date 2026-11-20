@@ -1,0 +1,15 @@
+config BR2_PACKAGE_QT6IMAGEFORMATS
+	bool "qt6imageformats"
+	select BR2_PACKAGE_QT6BASE_GUI
+	select BR2_PACKAGE_WEBP
+	select BR2_PACKAGE_WEBP_DEMUX
+	select BR2_PACKAGE_WEBP_MUX
+	help
+	  Qt Image Formats: extra image format plugins for Qt. Only the
+	  WebP plugin is built (Modrinth's icons in Manage Minecraft),
+	  against the system libwebp.
+
+	  Batocera's Buildroot (43.1) has no qt6imageformats package; if
+	  a later one does, drop this one.
+
+	  https://doc.qt.io/qt-6/qtimageformats-index.html

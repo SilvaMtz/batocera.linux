@@ -398,6 +398,8 @@ megaduck:
 minecraft:
   emulator: prismlauncher
   core:     prismlauncher
+  options:
+    hud_support: false
 model2:
   emulator: model2emu
   core:     model2emu
